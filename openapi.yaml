@@ -1,0 +1,1861 @@
+openapi: 3.0.2
+info:
+  title: Lunch Money API - v2 (Read-Only Subset)
+  description: >-
+    This is a read-only subset of the Lunch Money v2 API, optimized for applications
+    requiring non-destructive access. The full API is available at
+    `https://api.lunchmoney.dev/v2`. Get your access token from the [Lunch Money
+    developers page](https://my.lunchmoney.app/developers).[cite: 1]
+  termsOfService: https://lunchmoney.dev/#current-status[cite: 1]
+  contact:
+    email: devsupport@lunchmoney.app[cite: 1]
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html[cite: 1]
+  version: 2.9.4[cite: 1]
+servers:
+  - url: https://api.lunchmoney.dev/v2
+    description: v2 Lunch Money API Server[cite: 1]
+  - url: https://mock.lunchmoney.dev/v2
+    description: Static mock version of the v2 Lunch Money API Server[cite: 1]
+tags:
+  - name: me
+    description: View details and settings for the current user and account[cite: 1]
+  - name: summary
+    description: View a summary of the user's budget[cite: 1]
+  - name: categories
+    description: View categories[cite: 1]
+  - name: manual_accounts
+    description: View manually managed accounts (formerly called assets)[cite: 1]
+  - name: plaid_accounts
+    description: View accounts synced through Plaid[cite: 1]
+  - name: transactions
+    description: View transactions[cite: 1]
+  - name: recurring_items
+    description: View recurring items[cite: 1]
+  - name: tags
+    description: View tags[cite: 1]
+components:
+  schemas:
+    userObject:
+      type: object
+      title: user object (returned by /me)[cite: 1]
+      additionalProperties: false[cite: 1]
+      properties:
+        name:
+          type: string
+          description: The user's name[cite: 1]
+        email:
+          type: string
+          description: The user's email[cite: 1]
+        id:
+          type: integer
+          format: int32
+          description: Unique ID for the user[cite: 1]
+        account_id:
+          type: integer
+          format: int64
+          description: Unique ID for the linked budgeting account[cite: 1]
+        budget_name:
+          type: string
+          description: Name of the linked budgeting account[cite: 1]
+        primary_currency:
+          description: Primary currency set in the user's settings[cite: 1]
+          allOf:
+            - $ref: "#/components/schemas/currencyEnum"[cite: 1]
+        api_key_label:
+          type: string
+          nullable: true[cite: 1]
+          description: Label assigned by the user to the API key being used. Returns null if no label is set[cite: 1]
+      required:
+        - name[cite: 1]
+        - email[cite: 1]
+        - id[cite: 1]
+        - account_id[cite: 1]
+        - budget_name[cite: 1]
+        - primary_currency[cite: 1]
+        - api_key_label[cite: 1]
+    categoryObject:
+      type: object
+      title: category object[cite: 1]
+      additionalProperties: false[cite: 1]
+      properties:
+        id:
+          type: integer
+          format: int32
+          nullable: false[cite: 1]
+          description: System defined unique ID for the category[cite: 1]
+        name:
+          type: string
+          nullable: false[cite: 1]
+          minLength: 1[cite: 1]
+          maxLength: 100[cite: 1]
+          description: The name of the category.[cite: 1]
+        description:
+          type: string
+          nullable: true[cite: 1]
+          maxLength: 200[cite: 1]
+          description: The description of the category or `null` if not set.[cite: 1]
+        is_income:
+          type: boolean
+          nullable: false[cite: 1]
+          description: If `true`, the transactions in this category will be treated as income.[cite: 1]
+        exclude_from_budget:
+          type: boolean
+          nullable: false[cite: 1]
+          description: If `true`, the transactions in this category will be excluded from the budget.[cite: 1]
+        exclude_from_totals:
+          type: boolean
+          nullable: false[cite: 1]
+          description: If `true`, the transactions in this category will be excluded from totals.[cite: 1]
+        updated_at:
+          type: string
+          format: date-time
+          nullable: false[cite: 1]
+          description: The date and time of when the category was last updated.[cite: 1]
+        created_at:
+          type: string
+          format: date-time
+          nullable: false[cite: 1]
+          description: The date and time of when the category was created.[cite: 1]
+        group_id:
+          type: integer
+          format: int64
+          nullable: true[cite: 1]
+          description: The ID of the category group this category belongs to.[cite: 1]
+        is_group:
+          type: boolean[cite: 1]
+          description: If `true`, the category is created as a category group.[cite: 1]
+        children:
+          type: array[cite: 1]
+          items:
+            $ref: "#/components/schemas/childCategoryObject"[cite: 1]
+          description: For category groups, this will populate with details about the categories that belong to this group.[cite: 1]
+        archived:
+          type: boolean[cite: 1]
+          description: If true, the category is archived.[cite: 1]
+        archived_at:
+          type: string
+          format: date-time
+          nullable: true[cite: 1]
+          description: The date and time of when the category was last archived.[cite: 1]
+        order:
+          type: integer
+          nullable: true[cite: 1]
+          default: null[cite: 1]
+          description: An integer specifying the position in which the category is displayed.[cite: 1]
+        collapsed:
+          type: boolean
+          nullable: false[cite: 1]
+          default: false[cite: 1]
+          description: If `true`, the category is collapsed in the Lunch Money GUI.[cite: 1]
+      required:
+        - id[cite: 1]
+        - name[cite: 1]
+        - description[cite: 1]
+        - is_income[cite: 1]
+        - exclude_from_budget[cite: 1]
+        - exclude_from_totals[cite: 1]
+        - updated_at[cite: 1]
+        - created_at[cite: 1]
+        - group_id[cite: 1]
+        - is_group[cite: 1]
+        - archived[cite: 1]
+        - archived_at[cite: 1]
+        - order[cite: 1]
+        - collapsed[cite: 1]
+    childCategoryObject:
+      type: object[cite: 1]
+      additionalProperties: false[cite: 1]
+      properties:
+        id:
+          type: integer
+          format: int32
+          nullable: false[cite: 1]
+          description: A system defined unique identifier for the category.[cite: 1]
+        name:
+          type: string
+          nullable: false[cite: 1]
+          minLength: 1[cite: 1]
+          maxLength: 100[cite: 1]
+          description: The name of the category.[cite: 1]
+        description:
+          type: string
+          nullable: true[cite: 1]
+          maxLength: 200[cite: 1]
+          description: The description of the category or `null` if not set.[cite: 1]
+        is_income:
+          type: boolean
+          nullable: false[cite: 1]
+          description: If true, the transactions in this category will be treated as income.[cite: 1]
+        exclude_from_budget:
+          type: boolean
+          nullable: false[cite: 1]
+          description: If true, the transactions in this category will be excluded from the budget.[cite: 1]
+        exclude_from_totals:
+          type: boolean
+          nullable: false[cite: 1]
+          description: If true, the transactions in this category will be excluded from totals.[cite: 1]
+        updated_at:
+          type: string
+          format: date-time
+          nullable: false[cite: 1]
+          description: The date and time of when the category was last updated.[cite: 1]
+        created_at:
+          type: string
+          format: date-time
+          nullable: false[cite: 1]
+          description: The date and time of when the category was created.[cite: 1]
+        group_id:
+          type: integer
+          format: int64
+          nullable: true[cite: 1]
+          description: The ID of the category group this category belongs to.[cite: 1]
+        is_group:
+          type: boolean[cite: 1]
+          enum:
+            - false[cite: 1]
+          description: Will always be false for a category that is part of category group.[cite: 1]
+        archived:
+          type: boolean[cite: 1]
+          description: If true, the category is archived.[cite: 1]
+        archived_at:
+          type: string
+          format: date-time
+          nullable: true[cite: 1]
+          description: The date and time of when the category was last archived.[cite: 1]
+        order:
+          type: integer
+          nullable: true[cite: 1]
+          description: An index specifying the position in which the category is displayed.[cite: 1]
+        collapsed:
+          type: boolean
+          nullable: true[cite: 1]
+          description: If `true`, the category is collapsed.[cite: 1]
+      required:
+        - id[cite: 1]
+        - name[cite: 1]
+        - description[cite: 1]
+        - is_income[cite: 1]
+        - exclude_from_budget[cite: 1]
+        - exclude_from_totals[cite: 1]
+        - updated_at[cite: 1]
+        - created_at[cite: 1]
+        - group_id[cite: 1]
+        - is_group[cite: 1]
+        - archived[cite: 1]
+        - archived_at[cite: 1]
+        - order[cite: 1]
+    manualAccountObject:
+      type: object
+      title: manual account object[cite: 1]
+      additionalProperties: false[cite: 1]
+      description: An object containing information about a manual account[cite: 1]
+      properties:
+        id:
+          type: integer
+          format: int32
+          description: The unique identifier of this account[cite: 1]
+        name:
+          type: string
+          minLength: 1[cite: 1]
+          maxLength: 45[cite: 1]
+          description: Name of the account[cite: 1]
+        institution_name:
+          type: string
+          nullable: true[cite: 1]
+          minLength: 1[cite: 1]
+          maxLength: 50[cite: 1]
+          description: Name of institution holding the account[cite: 1]
+        display_name:
+          type: string
+          nullable: true[cite: 1]
+          description: Optional display name for the account.[cite: 1]
+        type:
+          description: Primary type of the account[cite: 1]
+          allOf:
+            - $ref: "#/components/schemas/accountTypeEnum"[cite: 1]
+        subtype:
+          type: string
+          nullable: true[cite: 1]
+          minLength: 1[cite: 1]
+          maxLength: 100[cite: 1]
+          description: Optional account subtype.[cite: 1]
+        balance:
+          type: string
+          pattern: ^-?\d+(\.\d{1,4})?$[cite: 1]
+          description: Current balance of the account in numeric format to 4 decimal places[cite: 1]
+        currency:
+          type: string
+          minLength: 3[cite: 1]
+          maxLength: 3[cite: 1]
+          description: Three-letter lowercase currency code[cite: 1]
+        to_base:
+          type: number[cite: 1]
+          description: The balance converted to the user's primary currency[cite: 1]
+        balance_as_of:
+          type: string
+          format: date-time[cite: 1]
+          description: Date balance was last updated[cite: 1]
+        status:
+          type: string[cite: 1]
+          description: The status of the account[cite: 1]
+          enum:
+            - active[cite: 1]
+            - closed[cite: 1]
+        closed_on:
+          type: string
+          format: date[cite: 1]
+          nullable: true[cite: 1]
+          description: The date this account was closed in YYYY-MM-DD format.[cite: 1]
+        external_id:
+          type: string
+          nullable: true[cite: 1]
+          minLength: 0[cite: 1]
+          maxLength: 75[cite: 1]
+          description: An optional external_id[cite: 1]
+        custom_metadata:
+          type: object
+          nullable: true[cite: 1]
+          description: User defined JSON data[cite: 1]
+          additionalProperties: true[cite: 1]
+        exclude_from_transactions:
+          type: boolean[cite: 1]
+          default: false[cite: 1]
+          description: If true, this account will not show up as an option when creating transactions manually[cite: 1]
+        created_by_name:
+          type: string[cite: 1]
+          description: The name of the user who created the account[cite: 1]
+        created_at:
+          type: string
+          format: date-time[cite: 1]
+          description: Date/time the account was created[cite: 1]
+        updated_at:
+          type: string
+          format: date-time[cite: 1]
+          description: Date/time the account was updated[cite: 1]
+      required:
+        - id[cite: 1]
+        - name[cite: 1]
+        - type[cite: 1]
+        - subtype[cite: 1]
+        - display_name[cite: 1]
+        - balance[cite: 1]
+        - currency[cite: 1]
+        - to_base[cite: 1]
+        - balance_as_of[cite: 1]
+        - closed_on[cite: 1]
+        - institution_name[cite: 1]
+        - external_id[cite: 1]
+        - exclude_from_transactions[cite: 1]
+        - created_by_name[cite: 1]
+        - created_at[cite: 1]
+        - updated_at[cite: 1]
+        - status[cite: 1]
+    plaidAccountObject:
+      type: object
+      title: plaid account object[cite: 1]
+      additionalProperties: false[cite: 1]
+      description: An object containing information about an account synced via Plaid[cite: 1]
+      properties:
+        id:
+          type: integer
+          format: int32
+          description: The unique identifier of this account[cite: 1]
+        plaid_item_id:
+          type: string
+          nullable: true[cite: 1]
+          minLength: 0[cite: 1]
+          maxLength: 255[cite: 1]
+          description: The unique identifier of the Plaid connection[cite: 1]
+        date_linked:
+          type: string
+          format: date[cite: 1]
+          description: Date account was first linked[cite: 1]
+        linked_by_name:
+          type: string
+          nullable: false[cite: 1]
+          description: The name of the user who linked the account[cite: 1]
+        name:
+          type: string[cite: 1]
+          description: Name of the account.[cite: 1]
+        display_name:
+          type: string
+          nullable: true[cite: 1]
+          description: Optional display name for the account set by the user.[cite: 1]
+        type:
+          type: string[cite: 1]
+          description: Primary type of the account, such as `credit`, `depository`, etc.[cite: 1]
+        subtype:
+          type: string[cite: 1]
+          description: Optional account subtype.[cite: 1]
+        mask:
+          type: string[cite: 1]
+          description: Mask of account.[cite: 1]
+        institution_name:
+          type: string[cite: 1]
+          description: Name of institution holding the account.[cite: 1]
+        status:
+          type: string[cite: 1]
+          description: Denotes the current status of the account within Lunch Money.[cite: 1]
+          enum:
+            - active[cite: 1]
+            - inactive[cite: 1]
+            - closed[cite: 1]
+            - deactivated[cite: 1]
+            - not found[cite: 1]
+            - not supported[cite: 1]
+            - relink[cite: 1]
+            - syncing[cite: 1]
+            - revoked[cite: 1]
+            - error[cite: 1]
+        allow_transaction_modifications:
+          type: boolean[cite: 1]
+          description: If `false`, transactions imported for this synced account can be modified.[cite: 1]
+        limit:
+          type: number
+          nullable: true[cite: 1]
+          description: Optional credit limit of the account.[cite: 1]
+        balance:
+          type: string[cite: 1]
+          description: Current balance of the account in numeric format to 4 decimal places.[cite: 1]
+        currency:
+          type: string
+          minLength: 3[cite: 1]
+          maxLength: 3[cite: 1]
+          description: Three-letter lowercase currency code[cite: 1]
+        to_base:
+          type: number[cite: 1]
+          description: The account balance converted to the user's primary currency[cite: 1]
+        balance_last_update:
+          type: string
+          format: date-time
+          nullable: true[cite: 1]
+          description: Date balance was last updated[cite: 1]
+        import_start_date:
+          type: string
+          format: date
+          nullable: true[cite: 1]
+          description: Date of earliest date allowed for importing transactions.[cite: 1]
+        last_import:
+          type: string
+          format: date-time
+          nullable: true[cite: 1]
+          description: Timestamp of the last time data was imported.[cite: 1]
+        last_fetch:
+          type: string
+          format: date-time
+          nullable: true[cite: 1]
+          description: Timestamp of the last successful fetch request.[cite: 1]
+        plaid_last_successful_update:
+          type: string
+          format: date-time
+          nullable: true[cite: 1]
+          description: Timestamp of the last time Plaid successfully connected with institution.[cite: 1]
+      required:
+        - id[cite: 1]
+        - plaid_item_id[cite: 1]
+        - date_linked[cite: 1]
+        - linked_by_name[cite: 1]
+        - name[cite: 1]
+        - display_name[cite: 1]
+        - type[cite: 1]
+        - subtype[cite: 1]
+        - mask[cite: 1]
+        - institution_name[cite: 1]
+        - status[cite: 1]
+        - allow_transaction_modifications[cite: 1]
+        - limit[cite: 1]
+        - balance[cite: 1]
+        - currency[cite: 1]
+        - to_base[cite: 1]
+        - balance_last_update[cite: 1]
+        - import_start_date[cite: 1]
+        - last_import[cite: 1]
+        - last_fetch[cite: 1]
+        - plaid_last_successful_update[cite: 1]
+    recurringObject:
+      type: object
+      title: recurring item object[cite: 1]
+      properties:
+        id:
+          type: integer
+          format: int32
+          description: The unique identifier of this recurring item[cite: 1]
+        description:
+          type: string
+          nullable: true[cite: 1]
+          description: An optional description of this recurring item.[cite: 1]
+        status:
+          type: string[cite: 1]
+          description: The status of this recurring item.[cite: 1]
+          enum:
+            - suggested[cite: 1]
+            - reviewed[cite: 1]
+        transaction_criteria:
+          type: object[cite: 1]
+          description: The set of properties used to identify matching transactions.[cite: 1]
+          properties:
+            start_date:
+              type: string
+              format: date
+              nullable: true[cite: 1]
+              description: The beginning of the date range for matching transactions.[cite: 1]
+            end_date:
+              type: string
+              format: date
+              nullable: true[cite: 1]
+              description: The end of the date range for matching transactions.[cite: 1]
+            granularity:
+              type: string[cite: 1]
+              description: The unit of time used to define the cadence.[cite: 1]
+              enum:
+                - day[cite: 1]
+                - week[cite: 1]
+                - month[cite: 1]
+                - year[cite: 1]
+            quantity:
+              type: integer[cite: 1]
+              description: The number of granularity units between each recurrence.[cite: 1]
+            anchor_date:
+              type: string
+              format: date
+              nullable: false[cite: 1]
+              description: The date used to calculate expected occurrences.[cite: 1]
+            payee:
+              type: string
+              nullable: true[cite: 1]
+              description: Represents the original transaction payee name.[cite: 1]
+            amount:
+              type: string
+              pattern: ^-?\d+(\.\d{1,4})?$[cite: 1]
+              description: The expected amount for a transaction.[cite: 1]
+            to_base:
+              type: number[cite: 1]
+              description: The amount converted to the user's primary currency[cite: 1]
+            currency:
+              type: string
+              nullable: false[cite: 1]
+              description: Three-letter lowercase currency code.[cite: 1]
+            plaid_account_id:
+              type: integer
+              format: int64
+              nullable: true[cite: 1]
+              description: The Plaid account ID associated, if any.[cite: 1]
+            manual_account_id:
+              type: integer
+              format: int64
+              nullable: true[cite: 1]
+              description: The manual account ID associated, if any.[cite: 1]
+          required:
+            - start_date[cite: 1]
+            - end_date[cite: 1]
+            - granularity[cite: 1]
+            - quantity[cite: 1]
+            - anchor_date[cite: 1]
+            - payee[cite: 1]
+            - amount[cite: 1]
+            - to_base[cite: 1]
+            - currency[cite: 1]
+            - plaid_account_id[cite: 1]
+            - manual_account_id[cite: 1]
+        overrides:
+          type: object[cite: 1]
+          description: The values that will be applied to matching transactions.[cite: 1]
+          properties:
+            payee:
+              type: string
+              nullable: false[cite: 1]
+              description: The payee name that will be displayed.[cite: 1]
+            notes:
+              type: string
+              nullable: false[cite: 1]
+              description: The notes that will be displayed.[cite: 1]
+            category_id:
+              type: integer
+              nullable: false[cite: 1]
+              description: The ID of the category.[cite: 1]
+        matches:
+          type: object
+          nullable: true[cite: 1]
+          description: Details on expected, found and missing transactions.[cite: 1]
+          properties:
+            request_start_date:
+              type: string
+              format: date[cite: 1]
+              description: Start of date range used.[cite: 1]
+            request_end_date:
+              type: string
+              format: date[cite: 1]
+              description: End of date range used.[cite: 1]
+            expected_occurrence_dates:
+              type: array[cite: 1]
+              items:
+                type: string
+                format: date[cite: 1]
+            found_transactions:
+              type: array[cite: 1]
+              description: A list with the dates and IDs of matching transactions.[cite: 1]
+              items:
+                type: object[cite: 1]
+                properties:
+                  date:
+                    type: string
+                    format: date[cite: 1]
+                  transaction_id:
+                    type: integer[cite: 1]
+            missing_transaction_dates:
+              type: array[cite: 1]
+              items:
+                type: string
+                format: date[cite: 1]
+        created_by:
+          type: integer
+          nullable: false[cite: 1]
+          description: The ID of the user who created it.[cite: 1]
+        created_at:
+          type: string
+          format: date-time
+          nullable: false[cite: 1]
+          description: Date/time the recurring item was created.[cite: 1]
+        updated_at:
+          type: string
+          format: date-time
+          nullable: false[cite: 1]
+          description: Date/time the recurring item was updated.[cite: 1]
+        source:
+          type: string[cite: 1]
+          description: The creation source.[cite: 1]
+          enum:
+            - manual[cite: 1]
+            - transaction[cite: 1]
+            - system[cite: 1]
+      required:
+        - id[cite: 1]
+        - description[cite: 1]
+        - status[cite: 1]
+        - transaction_criteria[cite: 1]
+        - overrides[cite: 1]
+        - matches[cite: 1]
+        - created_by[cite: 1]
+        - created_at[cite: 1]
+        - updated_at[cite: 1]
+        - source[cite: 1]
+    tagObject:
+      type: object
+      title: tag object[cite: 1]
+      additionalProperties: false[cite: 1]
+      properties:
+        id:
+          type: integer
+          format: int32
+          description: Unique identifier for the tag.[cite: 1]
+        name:
+          type: string
+          description: Name of the tag.[cite: 1]
+        description:
+          type: string
+          nullable: true[cite: 1]
+          description: Description of the tag.[cite: 1]
+        text_color:
+          type: string
+          nullable: true[cite: 1]
+          description: The text color of the tag.[cite: 1]
+        background_color:
+          type: string
+          nullable: true[cite: 1]
+          description: The background color of the tag.[cite: 1]
+        updated_at:
+          type: string
+          format: date-time
+          nullable: false[cite: 1]
+          description: The date and time of when the tag was last updated.[cite: 1]
+        created_at:
+          type: string
+          format: date-time
+          nullable: false[cite: 1]
+          description: The date and time of when the tag was created.[cite: 1]
+        archived:
+          type: boolean[cite: 1]
+          description: If `true`, the tag is archived.[cite: 1]
+        archived_at:
+          type: string
+          format: date-time
+          nullable: true[cite: 1]
+          description: The date and time of when the tag was last archived[cite: 1]
+      required:
+        - id[cite: 1]
+        - name[cite: 1]
+        - description[cite: 1]
+        - text_color[cite: 1]
+        - background_color[cite: 1]
+        - created_at[cite: 1]
+        - updated_at[cite: 1]
+        - archived[cite: 1]
+        - archived_at[cite: 1]
+    transactionObject:
+      type: object
+      title: transaction object[cite: 1]
+      additionalProperties: false[cite: 1]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: System created unique identifier for transaction[cite: 1]
+        date:
+          type: string
+          format: date
+          description: Date of transaction in ISO 8601 format[cite: 1]
+        amount:
+          type: string
+          description: Amount of the transaction in numeric format to 4 decimal places.[cite: 1]
+        currency:
+          description: Three-letter lowercase currency code.[cite: 1]
+          allOf:
+            - $ref: "#/components/schemas/currencyEnum"[cite: 1]
+        to_base:
+          type: number
+          format: double
+          description: The amount converted to the user's primary currency.[cite: 1]
+        recurring_id:
+          type: integer
+          format: int32
+          nullable: true[cite: 1]
+          description: The unique identifier of the associated recurring item.[cite: 1]
+        payee:
+          type: string[cite: 1]
+          description: Name of payee set by the user or institution.[cite: 1]
+        original_name:
+          type: string
+          nullable: true[cite: 1]
+          description: Original payee name from the source.[cite: 1]
+        category_id:
+          type: integer
+          format: int32
+          nullable: true[cite: 1]
+          description: Unique identifier of associated category.[cite: 1]
+        plaid_account_id:
+          type: integer
+          format: int32
+          nullable: true[cite: 1]
+          description: The unique identifier of the plaid account associated.[cite: 1]
+        manual_account_id:
+          type: integer
+          format: int32
+          nullable: true[cite: 1]
+          description: The unique identifier of the manual account associated.[cite: 1]
+        external_id:
+          type: string
+          nullable: true[cite: 1]
+          minLength: 0[cite: 1]
+          maxLength: 75[cite: 1]
+          description: A user-defined external ID.[cite: 1]
+        tag_ids:
+          type: array
+          nullable: false[cite: 1]
+          description: A list of tag_ids for the tags associated with this transaction.[cite: 1]
+          items:
+            type: integer
+            format: int32[cite: 1]
+        notes:
+          type: string
+          nullable: true[cite: 1]
+          description: Any transaction notes set by the user.[cite: 1]
+        status:
+          type: string[cite: 1]
+          description: Status of the transaction[cite: 1]
+          enum:
+            - reviewed[cite: 1]
+            - unreviewed[cite: 1]
+            - delete_pending[cite: 1]
+        is_pending:
+          type: boolean[cite: 1]
+          description: Denotes if the transaction is pending.[cite: 1]
+        created_at:
+          type: string
+          format: date-time
+          description: The date and time of when the transaction was created.[cite: 1]
+        updated_at:
+          type: string
+          format: date-time
+          description: The date and time of when the transaction was last updated.[cite: 1]
+        is_split_parent:
+          type: boolean[cite: 1]
+          description: If `true`, this transaction has been split.[cite: 1]
+        split_parent_id:
+          type: integer
+          format: int64
+          nullable: true[cite: 1]
+          description: A transaction ID if this is a split transaction.[cite: 1]
+        is_group_parent:
+          type: boolean[cite: 1]
+          description: `true` if this transaction represents a group of transactions.[cite: 1]
+        group_parent_id:
+          type: integer
+          format: int64
+          nullable: true[cite: 1]
+          description: Is set if this transaction is part of a group.[cite: 1]
+        children:
+          type: array
+          nullable: false[cite: 1]
+          items:
+            $ref: "#/components/schemas/childTransactionObject"[cite: 1]
+          description: Exists only for transactions which are parents of a split or group.[cite: 1]
+        plaid_metadata:
+          type: object
+          nullable: true[cite: 1]
+          description: Plaid metadata if requested.[cite: 1]
+        custom_metadata:
+          type: object
+          nullable: true[cite: 1]
+          description: Custom metadata if requested.[cite: 1]
+        files:
+          type: array
+          nullable: false[cite: 1]
+          description: A list of objects that describe attachments.[cite: 1]
+          items:
+            $ref: "#/components/schemas/transactionAttachmentObject"[cite: 1]
+        source:
+          type: string
+          nullable: true[cite: 1]
+          description: Source of the transaction[cite: 1]
+          enum:
+            - api[cite: 1]
+            - csv[cite: 1]
+            - manual[cite: 1]
+            - merge[cite: 1]
+            - plaid[cite: 1]
+            - recurring[cite: 1]
+            - rule[cite: 1]
+            - split[cite: 1]
+            - user[cite: 1]
+      required:
+        - id[cite: 1]
+        - date[cite: 1]
+        - amount[cite: 1]
+        - currency[cite: 1]
+        - to_base[cite: 1]
+        - recurring_id[cite: 1]
+        - payee[cite: 1]
+        - category_id[cite: 1]
+        - notes[cite: 1]
+        - status[cite: 1]
+        - is_pending[cite: 1]
+        - created_at[cite: 1]
+        - updated_at[cite: 1]
+        - split_parent_id[cite: 1]
+        - is_group_parent[cite: 1]
+        - group_parent_id[cite: 1]
+        - manual_account_id[cite: 1]
+        - plaid_account_id[cite: 1]
+        - tag_ids[cite: 1]
+        - source[cite: 1]
+        - external_id[cite: 1]
+    childTransactionObject:
+      type: object[cite: 1]
+      additionalProperties: false[cite: 1]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: System created unique identifier[cite: 1]
+        date:
+          type: string
+          format: date
+          description: Date of transaction[cite: 1]
+        amount:
+          type: string[cite: 1]
+        currency:
+          description: Three-letter lowercase currency code[cite: 1]
+          allOf:
+            - $ref: "#/components/schemas/currencyEnum"[cite: 1]
+        to_base:
+          type: number
+          format: double[cite: 1]
+        recurring_id:
+          type: integer
+          format: int32
+          nullable: true[cite: 1]
+        payee:
+          type: string[cite: 1]
+        original_name:
+          type: string
+          nullable: true[cite: 1]
+        category_id:
+          type: integer
+          format: int32
+          nullable: true[cite: 1]
+        notes:
+          type: string
+          nullable: true[cite: 1]
+        status:
+          type: string[cite: 1]
+          enum:
+            - reviewed[cite: 1]
+            - unreviewed[cite: 1]
+            - delete_pending[cite: 1]
+        is_pending:
+          type: boolean[cite: 1]
+        created_at:
+          type: string
+          format: date-time[cite: 1]
+        updated_at:
+          type: string
+          format: date-time[cite: 1]
+        is_split_parent:
+          type: boolean[cite: 1]
+        split_parent_id:
+          type: integer
+          format: int64
+          nullable: true[cite: 1]
+        is_group_parent:
+          type: boolean[cite: 1]
+        group_parent_id:
+          type: integer
+          format: int64
+          nullable: true[cite: 1]
+        manual_account_id:
+          type: integer
+          format: int32
+          nullable: true[cite: 1]
+        plaid_account_id:
+          type: integer
+          format: int32
+          nullable: true[cite: 1]
+        tag_ids:
+          type: array
+          nullable: false[cite: 1]
+          items:
+            type: integer
+            format: int32[cite: 1]
+        source:
+          type: string
+          nullable: true[cite: 1]
+          enum:
+            - api[cite: 1]
+            - csv[cite: 1]
+            - manual[cite: 1]
+            - merge[cite: 1]
+            - plaid[cite: 1]
+            - recurring[cite: 1]
+            - rule[cite: 1]
+            - split[cite: 1]
+            - user[cite: 1]
+        external_id:
+          type: string
+          nullable: true[cite: 1]
+          minLength: 0[cite: 1]
+          maxLength: 75[cite: 1]
+        plaid_metadata:
+          type: object
+          nullable: true[cite: 1]
+        custom_metadata:
+          type: object
+          nullable: true[cite: 1]
+        files:
+          type: array
+          nullable: false[cite: 1]
+          items:
+            $ref: "#/components/schemas/transactionAttachmentObject"[cite: 1]
+      required:
+        - id[cite: 1]
+        - date[cite: 1]
+        - amount[cite: 1]
+        - currency[cite: 1]
+        - to_base[cite: 1]
+        - recurring_id[cite: 1]
+        - payee[cite: 1]
+        - category_id[cite: 1]
+        - notes[cite: 1]
+        - status[cite: 1]
+        - is_pending[cite: 1]
+        - created_at[cite: 1]
+        - updated_at[cite: 1]
+        - split_parent_id[cite: 1]
+        - is_group_parent[cite: 1]
+        - group_parent_id[cite: 1]
+        - manual_account_id[cite: 1]
+        - plaid_account_id[cite: 1]
+        - tag_ids[cite: 1]
+        - source[cite: 1]
+        - external_id[cite: 1]
+    transactionAttachmentObject:
+      type: object
+      title: transaction attachment object[cite: 1]
+      additionalProperties: false[cite: 1]
+      properties:
+        id:
+          type: integer
+          format: int32
+          description: The unique identifier of the attachment[cite: 1]
+        uploaded_by:
+          type: integer
+          format: int64
+          description: The id of the user who uploaded the attachment[cite: 1]
+        name:
+          type: string
+          description: The name of the file[cite: 1]
+        type:
+          type: string
+          description: The MIME type of the file[cite: 1]
+        size:
+          type: integer
+          description: The size of the file in kilobytes[cite: 1]
+        notes:
+          type: string
+          nullable: true[cite: 1]
+          description: Optional notes about the attachment[cite: 1]
+        created_at:
+          type: string
+          format: date-time
+          description: The date and time when the attachment was created in ISO 8601 format[cite: 1]
+    budgetSettingsResponseObject:
+      type: object
+      additionalProperties: false[cite: 1]
+      description: Budget period and display settings[cite: 1]
+      properties:
+        budget_period_granularity:
+          type: string[cite: 1]
+          enum:
+            - day[cite: 1]
+            - week[cite: 1]
+            - month[cite: 1]
+            - year[cite: 1]
+            - twice a month[cite: 1]
+          description: Budget period granularity[cite: 1]
+        budget_period_quantity:
+          type: number
+          format: double[cite: 1]
+          description: The number of granularity units that make up a budgeting period.[cite: 1]
+        budget_period_anchor_date:
+          type: string
+          format: date[cite: 1]
+          description: The date from which the budgeting period is calculated.[cite: 1]
+        budget_hide_no_activity:
+          type: boolean[cite: 1]
+          default: false[cite: 1]
+        budget_use_last_day_of_month:
+          type: boolean[cite: 1]
+          default: false[cite: 1]
+        budget_income_option:
+          type: string[cite: 1]
+          enum:
+            - max[cite: 1]
+            - budgeted[cite: 1]
+            - activity[cite: 1]
+        budget_rollover_left_to_budget:
+          type: boolean[cite: 1]
+          default: false[cite: 1]
+      required:
+        - budget_hide_no_activity[cite: 1]
+        - budget_period_quantity[cite: 1]
+        - budget_period_granularity[cite: 1]
+        - budget_period_anchor_date[cite: 1]
+        - budget_use_last_day_of_month[cite: 1]
+        - budget_income_option[cite: 1]
+        - budget_rollover_left_to_budget[cite: 1]
+    summaryResponseObject:
+      type: object
+      title: summary object[cite: 1]
+      additionalProperties: false[cite: 1]
+      description: Budget summary for the requested range[cite: 1]
+      properties:
+        aligned:
+          type: boolean[cite: 1]
+          description: true if aligned with budget settings.[cite: 1]
+        categories:
+          type: array[cite: 1]
+          items:
+            $ref: "#/components/schemas/summaryCategoryObject"[cite: 1]
+        totals:
+          $ref: "#/components/schemas/summaryTotalsObject"[cite: 1]
+        rollover_pool:
+          nullable: true[cite: 1]
+          $ref: "#/components/schemas/summaryRolloverPoolObject"[cite: 1]
+      required:
+        - aligned[cite: 1]
+        - categories[cite: 1]
+    summaryTotalsObject:
+      type: object
+      additionalProperties: false[cite: 1]
+      properties:
+        inflow:
+          $ref: "#/components/schemas/summaryTotalsBreakdownObject"[cite: 1]
+        outflow:
+          $ref: "#/components/schemas/summaryTotalsBreakdownObject"[cite: 1]
+    summaryTotalsBreakdownObject:
+      type: object[cite: 1]
+      additionalProperties: false[cite: 1]
+      properties:
+        other_activity:
+          type: number[cite: 1]
+        recurring_activity:
+          type: number[cite: 1]
+        recurring_remaining:
+          type: number[cite: 1]
+        recurring_expected:
+          type: number[cite: 1]
+        uncategorized:
+          type: number[cite: 1]
+        uncategorized_count:
+          type: integer[cite: 1]
+        uncategorized_recurring:
+          type: number[cite: 1]
+    summaryCategoryObject:
+      type: object[cite: 1]
+      additionalProperties: false[cite: 1]
+      properties:
+        category_id:
+          type: integer[cite: 1]
+        totals:
+          $ref: "#/components/schemas/summaryCategoryTotalsObject"[cite: 1]
+        occurrences:
+          type: array[cite: 1]
+          items:
+            $ref: "#/components/schemas/summaryCategoryOccurrenceObject"[cite: 1]
+        rollover_pool:
+          $ref: "#/components/schemas/summaryRolloverPoolObject"[cite: 1]
+      required:
+        - category_id[cite: 1]
+        - totals[cite: 1]
+    summaryCategoryTotalsObject:
+      type: object[cite: 1]
+      additionalProperties: false[cite: 1]
+      properties:
+        other_activity:
+          type: number[cite: 1]
+        recurring_activity:
+          type: number[cite: 1]
+        budgeted:
+          type: number[cite: 1]
+          nullable: true[cite: 1]
+        available:
+          type: number[cite: 1]
+          nullable: true[cite: 1]
+        recurring_remaining:
+          type: number[cite: 1]
+        recurring_expected:
+          type: number[cite: 1]
+      required:
+        - other_activity[cite: 1]
+        - recurring_activity[cite: 1]
+        - recurring_remaining[cite: 1]
+        - recurring_expected[cite: 1]
+    summaryCategoryOccurrenceObject:
+      type: object[cite: 1]
+      additionalProperties: false[cite: 1]
+      properties:
+        in_range:
+          type: boolean[cite: 1]
+        start_date:
+          type: string
+          format: date[cite: 1]
+        end_date:
+          type: string
+          format: date[cite: 1]
+        other_activity:
+          type: number[cite: 1]
+        recurring_activity:
+          type: number[cite: 1]
+        budgeted:
+          type: number[cite: 1]
+          nullable: true[cite: 1]
+        budgeted_amount:
+          type: string
+          nullable: true[cite: 1]
+        budgeted_currency:
+          nullable: true[cite: 1]
+          allOf:
+            - $ref: "#/components/schemas/currencyEnum"[cite: 1]
+        notes:
+          type: string
+          nullable: true[cite: 1]
+      required:
+        - in_range[cite: 1]
+        - start_date[cite: 1]
+        - end_date[cite: 1]
+        - other_activity[cite: 1]
+        - recurring_activity[cite: 1]
+        - budgeted[cite: 1]
+        - budgeted_amount[cite: 1]
+        - budgeted_currency[cite: 1]
+        - notes[cite: 1]
+    summaryRolloverPoolObject:
+      type: object[cite: 1]
+      additionalProperties: false[cite: 1]
+      properties:
+        budgeted_to_base:
+          type: number[cite: 1]
+        all_adjustments:
+          type: array[cite: 1]
+          items:
+            $ref: "#/components/schemas/summaryRolloverPoolAdjustmentObject"[cite: 1]
+      required:
+        - budgeted_to_base[cite: 1]
+        - all_adjustments[cite: 1]
+    summaryRolloverPoolAdjustmentObject:
+      type: object[cite: 1]
+      additionalProperties: false[cite: 1]
+      properties:
+        in_range:
+          type: boolean[cite: 1]
+        date:
+          type: string
+          format: date[cite: 1]
+        amount:
+          type: string[cite: 1]
+        currency:
+          allOf:
+            - $ref: "#/components/schemas/currencyEnum"[cite: 1]
+        to_base:
+          type: number[cite: 1]
+      required:
+        - in_range[cite: 1]
+        - date[cite: 1]
+        - amount[cite: 1]
+        - currency[cite: 1]
+        - to_base[cite: 1]
+    errorResponseObject:
+      type: object
+      title: error response object[cite: 1]
+      properties:
+        message:
+          type: string[cite: 1]
+        errors:
+          type: array[cite: 1]
+          items:
+            type: object[cite: 1]
+            properties:
+              errMsg:
+                type: string[cite: 1]
+            required:
+              - errMsg[cite: 1]
+      required:
+        - message[cite: 1]
+        - errors[cite: 1]
+    accountTypeEnum:
+      type: string
+      title: manual account type enum[cite: 1]
+      enum:
+        - cash[cite: 1]
+        - credit[cite: 1]
+        - cryptocurrency[cite: 1]
+        - employee compensation[cite: 1]
+        - investment[cite: 1]
+        - loan[cite: 1]
+        - other liability[cite: 1]
+        - other asset[cite: 1]
+        - real estate[cite: 1]
+        - vehicle[cite: 1]
+    currencyEnum:
+      type: string
+      title: currency enum[cite: 1]
+      enum: [aed, afn, all, amd, ang, aoa, ars, aud, awg, azn, bam, bbd, bdt, bgn, bhd, bif, bmd, bnd, bob, brl, bsd, btc, btn, bwp, byn, bzd, cad, cdf, chf, clf, clp, cny, cop, crc, cuc, cup, cve, czk, djf, dkk, dop, dzd, egp, ern, etb, eth, eur, fjd, fkp, gbp, gel, ggp, ghs, gip, gmd, gnf, gtq, gyd, hkd, hnl, hrk, htg, huf, idr, ils, imp, inr, iqd, irr, isk, jep, jmd, jod, jpy, kes, kgs, khr, kmf, kpw, krw, kwd, kyd, kzt, lak, lbp, lkr, lrd, lsl, ltl, lvl, lyd, mad, mdl, mga, mkd, mmk, mnt, mop, mro, mur, mvr, mwk, mxn, myr, mzn, nad, ngn, nio, nok, npr, nzd, omr, pab, pen, pgk, php, pkr, pln, pyg, qar, ron, rsd, rub, rwf, sar, sbd, scr, sdg, sek, sgd, shp, sll, sos, srd, std, svc, syp, szl, thb, tjs, tmt, tnd, top, try, ttd, twd, tzs, uah, ugx, usd, uyu, uzs, vef, ves, vnd, vuv, wst, xaf, xag, xau, xcd, xof, xpf, yer, zar, zmw, zwl][cite: 1]
+  responses:
+    unauthorizedToken:
+      description: Unauthorized API token passed.[cite: 1]
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/errorResponseObject"[cite: 1]
+    rateLimited:
+      description: Too Many Requests.[cite: 1]
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/errorResponseObject"[cite: 1]
+    serverError:
+      description: Internal Server Error.[cite: 1]
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/errorResponseObject"[cite: 1]
+  securitySchemes:
+    bearerSecurity:
+      type: http[cite: 1]
+      scheme: bearer[cite: 1]
+      bearerFormat: JWT[cite: 1]
+    cookieAuth:
+      type: apiKey[cite: 1]
+      in: cookie[cite: 1]
+      name: _lm_access_token[cite: 1]
+paths:
+  /me:
+    get:
+      tags:
+        - me[cite: 1]
+      summary: Get current user[cite: 1]
+      operationId: getMe[cite: 1]
+      responses:
+        "200":
+          description: The User Object.[cite: 1]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/userObject"[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+        "429":
+          $ref: "#/components/responses/rateLimited"[cite: 1]
+        "500":
+          $ref: "#/components/responses/serverError"[cite: 1]
+  /summary:
+    get:
+      tags:
+        - summary[cite: 1]
+      summary: Get summary[cite: 1]
+      operationId: getBudgetSummary[cite: 1]
+      parameters:
+        - in: query
+          name: start_date[cite: 1]
+          required: true[cite: 1]
+          schema:
+            type: string
+            format: date[cite: 1]
+        - in: query
+          name: end_date[cite: 1]
+          required: true[cite: 1]
+          schema:
+            type: string
+            format: date[cite: 1]
+        - in: query
+          name: include_exclude_from_budgets[cite: 1]
+          schema:
+            type: boolean
+            default: false[cite: 1]
+        - in: query
+          name: include_occurrences[cite: 1]
+          schema:
+            type: boolean
+            default: false[cite: 1]
+        - in: query
+          name: include_past_budget_dates[cite: 1]
+          schema:
+            type: boolean
+            default: false[cite: 1]
+        - in: query
+          name: include_totals[cite: 1]
+          schema:
+            type: boolean
+            default: false[cite: 1]
+        - in: query
+          name: include_rollover_pool[cite: 1]
+          schema:
+            type: boolean
+            default: false[cite: 1]
+      responses:
+        "200":
+          description: Summary of the user's budget.[cite: 1]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/summaryResponseObject"[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+        "429":
+          $ref: "#/components/responses/rateLimited"[cite: 1]
+        "500":
+          $ref: "#/components/responses/serverError"[cite: 1]
+  /categories:
+    get:
+      tags:
+        - categories[cite: 1]
+      summary: Get all categories[cite: 1]
+      operationId: getAllCategories[cite: 1]
+      parameters:
+        - name: format[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: string[cite: 1]
+            default: nested[cite: 1]
+            enum:
+              - nested[cite: 1]
+              - flattened[cite: 1]
+        - name: is_group[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: boolean[cite: 1]
+      responses:
+        "200":
+          description: A list of Category Objects[cite: 1]
+          content:
+            application/json:
+              schema:
+                type: object[cite: 1]
+                properties:
+                  categories:
+                    type: array[cite: 1]
+                    items:
+                      $ref: "#/components/schemas/categoryObject"[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+        "429":
+          $ref: "#/components/responses/rateLimited"[cite: 1]
+        "500":
+          $ref: "#/components/responses/serverError"[cite: 1]
+  /categories/{id}:
+    get:
+      tags:
+        - categories[cite: 1]
+      summary: Get a single category[cite: 1]
+      operationId: getCategoryById[cite: 1]
+      parameters:
+        - name: id[cite: 1]
+          in: path[cite: 1]
+          required: true[cite: 1]
+          schema:
+            type: integer
+            format: int32[cite: 1]
+      responses:
+        "201":
+          description: Category Object requested.[cite: 1]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/categoryObject"[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+        "429":
+          $ref: "#/components/responses/rateLimited"[cite: 1]
+        "500":
+          $ref: "#/components/responses/serverError"[cite: 1]
+  /manual_accounts:
+    get:
+      tags:
+        - manual_accounts[cite: 1]
+      summary: Get all manual accounts[cite: 1]
+      operationId: getAllManualAccounts[cite: 1]
+      responses:
+        "200":
+          description: A list of manual accounts[cite: 1]
+          content:
+            application/json:
+              schema:
+                type: object[cite: 1]
+                properties:
+                  manual_accounts:
+                    type: array[cite: 1]
+                    items:
+                      $ref: "#/components/schemas/manualAccountObject"[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+        "429":
+          $ref: "#/components/responses/rateLimited"[cite: 1]
+        "500":
+          $ref: "#/components/responses/serverError"[cite: 1]
+  /manual_accounts/{id}:
+    get:
+      tags:
+        - manual_accounts[cite: 1]
+      summary: Get a single manual account[cite: 1]
+      operationId: getManualAccountById[cite: 1]
+      parameters:
+        - name: id[cite: 1]
+          in: path[cite: 1]
+          required: true[cite: 1]
+          schema:
+            type: integer
+            format: int32[cite: 1]
+      responses:
+        "200":
+          description: Manual Account Object requested[cite: 1]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/manualAccountObject"[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+        "429":
+          $ref: "#/components/responses/rateLimited"[cite: 1]
+        "500":
+          $ref: "#/components/responses/serverError"[cite: 1]
+  /plaid_accounts:
+    get:
+      tags:
+        - plaid_accounts[cite: 1]
+      summary: Get all accounts synced via Plaid[cite: 1]
+      operationId: getAllPlaidAccounts[cite: 1]
+      responses:
+        "200":
+          description: A list of accounts synced via Plaid[cite: 1]
+          content:
+            application/json:
+              schema:
+                type: object[cite: 1]
+                properties:
+                  plaid_accounts:
+                    type: array[cite: 1]
+                    items:
+                      $ref: "#/components/schemas/plaidAccountObject"[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+        "429":
+          $ref: "#/components/responses/rateLimited"[cite: 1]
+        "500":
+          $ref: "#/components/responses/serverError"[cite: 1]
+  /plaid_accounts/{id}:
+    get:
+      tags:
+        - plaid_accounts[cite: 1]
+      summary: Get a single account that is synced via Plaid[cite: 1]
+      operationId: getPlaidAccountById[cite: 1]
+      parameters:
+        - name: id[cite: 1]
+          in: path[cite: 1]
+          required: true[cite: 1]
+          schema:
+            type: integer
+            format: int32[cite: 1]
+      responses:
+        "200":
+          description: Plaid Account Object requested.[cite: 1]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/plaidAccountObject"[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+        "429":
+          $ref: "#/components/responses/rateLimited"[cite: 1]
+        "500":
+          $ref: "#/components/responses/serverError"[cite: 1]
+  /transactions:
+    get:
+      tags:
+        - transactions[cite: 1]
+      summary: Get all transactions[cite: 1]
+      operationId: getAllTransactions[cite: 1]
+      parameters:
+        - name: start_date[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: string
+            format: date[cite: 1]
+        - name: end_date[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: string
+            format: date[cite: 1]
+        - name: created_since[cite: 1]
+          in: query[cite: 1]
+          schema:
+            oneOf:
+              - type: string
+                format: date[cite: 1]
+              - type: string
+                format: date-time[cite: 1]
+        - name: updated_since[cite: 1]
+          in: query[cite: 1]
+          schema:
+            oneOf:
+              - type: string
+                format: date[cite: 1]
+              - type: string
+                format: date-time[cite: 1]
+        - name: manual_account_id[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: integer
+            format: int32[cite: 1]
+        - name: plaid_account_id[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: integer
+            format: int32[cite: 1]
+        - name: recurring_id[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: integer
+            format: int32[cite: 1]
+        - name: category_id[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: integer
+            format: int32[cite: 1]
+        - name: tag_id[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: integer
+            format: int32[cite: 1]
+        - name: is_group_parent[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: boolean[cite: 1]
+        - name: status[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: string[cite: 1]
+            enum:
+              - reviewed[cite: 1]
+              - unreviewed[cite: 1]
+              - delete_pending[cite: 1]
+        - name: is_pending[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: boolean[cite: 1]
+        - name: include_pending[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: boolean
+            default: false[cite: 1]
+        - name: include_metadata[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: boolean
+            default: false[cite: 1]
+        - name: include_split_parents[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: boolean
+            default: false[cite: 1]
+        - name: include_group_children[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: boolean
+            default: false[cite: 1]
+        - name: include_children[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: boolean
+            default: false[cite: 1]
+        - name: include_files[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: boolean
+            default: false[cite: 1]
+        - name: limit[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: integer
+            minimum: 1[cite: 1]
+            maximum: 2000[cite: 1]
+            default: 1000[cite: 1]
+        - name: offset[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: integer[cite: 1]
+      responses:
+        "200":
+          description: Returns an array of transactions.[cite: 1]
+          content:
+            application/json:
+              schema:
+                properties:
+                  transactions:
+                    items:
+                      $ref: "#/components/schemas/transactionObject"[cite: 1]
+                    type: array[cite: 1]
+                  has_more:
+                    type: boolean[cite: 1]
+                required:
+                  - transactions[cite: 1]
+                  - has_more[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+        "429":
+          $ref: "#/components/responses/rateLimited"[cite: 1]
+        "500":
+          $ref: "#/components/responses/serverError"[cite: 1]
+  /transactions/{id}:
+    get:
+      tags:
+        - transactions[cite: 1]
+      summary: Get a single transaction[cite: 1]
+      operationId: getTransactionById[cite: 1]
+      parameters:
+        - name: id[cite: 1]
+          in: path[cite: 1]
+          required: true[cite: 1]
+          schema:
+            type: integer
+            format: int64[cite: 1]
+      responses:
+        "200":
+          description: Transaction Object requested.[cite: 1]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/transactionObject"[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+        "429":
+          $ref: "#/components/responses/rateLimited"[cite: 1]
+        "500":
+          $ref: "#/components/responses/serverError"[cite: 1]
+  /transactions/attachments/{file_id}:
+    get:
+      summary: Get a url to download a file attachment[cite: 1]
+      operationId: getTransactionAttachmentUrl[cite: 1]
+      tags:
+        - transactions[cite: 1]
+      parameters:
+        - name: file_id[cite: 1]
+          in: path[cite: 1]
+          required: true[cite: 1]
+          schema:
+            type: integer
+            format: int32[cite: 1]
+      responses:
+        "200":
+          description: Successfully retrieved the file attachment[cite: 1]
+          content:
+            application/json:
+              schema:
+                properties:
+                  url:
+                    type: string[cite: 1]
+                  expires_at:
+                    type: string
+                    format: date-time[cite: 1]
+                required:
+                  - url[cite: 1]
+                  - expires_at[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+  /tags:
+    get:
+      tags:
+        - tags[cite: 1]
+      summary: Get All Tags[cite: 1]
+      operationId: getAllTags[cite: 1]
+      responses:
+        "200":
+          description: A list of tags[cite: 1]
+          content:
+            application/json:
+              schema:
+                type: object[cite: 1]
+                properties:
+                  tags:
+                    type: array[cite: 1]
+                    items:
+                      $ref: "#/components/schemas/tagObject"[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+        "429":
+          $ref: "#/components/responses/rateLimited"[cite: 1]
+        "500":
+          $ref: "#/components/responses/serverError"[cite: 1]
+  /tags/{id}:
+    get:
+      tags:
+        - tags[cite: 1]
+      summary: Get a single tag[cite: 1]
+      operationId: getTagById[cite: 1]
+      parameters:
+        - name: id[cite: 1]
+          in: path[cite: 1]
+          required: true[cite: 1]
+          schema:
+            type: integer
+            format: int32[cite: 1]
+      responses:
+        "200":
+          description: Tag Object requested[cite: 1]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/tagObject"[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+        "429":
+          $ref: "#/components/responses/rateLimited"[cite: 1]
+        "500":
+          $ref: "#/components/responses/serverError"[cite: 1]
+  /recurring_items:
+    get:
+      tags:
+        - recurring_items[cite: 1]
+      summary: Get all recurring items[cite: 1]
+      operationId: getAllRecurring[cite: 1]
+      parameters:
+        - name: start_date[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: string
+            format: date[cite: 1]
+        - name: end_date[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: string
+            format: date[cite: 1]
+        - name: include_suggested[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: boolean[cite: 1]
+      responses:
+        "200":
+          description: A list of recurring items[cite: 1]
+          content:
+            application/json:
+              schema:
+                type: object[cite: 1]
+                properties:
+                  recurring_items:
+                    type: array[cite: 1]
+                    items:
+                      $ref: "#/components/schemas/recurringObject"[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+        "429":
+          $ref: "#/components/responses/rateLimited"[cite: 1]
+        "500":
+          $ref: "#/components/responses/serverError"[cite: 1]
+  /recurring_items/{id}:
+    get:
+      tags:
+        - recurring_items[cite: 1]
+      summary: Get a single recurring item[cite: 1]
+      operationId: getRecurringById[cite: 1]
+      parameters:
+        - name: id[cite: 1]
+          in: path[cite: 1]
+          required: true[cite: 1]
+          schema:
+            type: integer
+            format: int32[cite: 1]
+        - name: start_date[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: string
+            format: date[cite: 1]
+        - name: end_date[cite: 1]
+          in: query[cite: 1]
+          schema:
+            type: string
+            format: date[cite: 1]
+      responses:
+        "200":
+          description: Recurring item requested.[cite: 1]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/recurringObject"[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+        "429":
+          $ref: "#/components/responses/rateLimited"[cite: 1]
+        "500":
+          $ref: "#/components/responses/serverError"[cite: 1]
+  /budgets/settings:
+    get:
+      tags:
+        - budgets[cite: 1]
+      summary: Get budget settings[cite: 1]
+      operationId: getBudgetSettings[cite: 1]
+      responses:
+        "200":
+          description: Budget settings for the account[cite: 1]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/budgetSettingsResponseObject"[cite: 1]
+        "401":
+          $ref: "#/components/responses/unauthorizedToken"[cite: 1]
+        "429":
+          $ref: "#/components/responses/rateLimited"[cite: 1]
+        "500":
+          $ref: "#/components/responses/serverError"[cite: 1]
+security:
+  - bearerSecurity: [][cite: 1]
+  - cookieAuth: [][cite: 1]

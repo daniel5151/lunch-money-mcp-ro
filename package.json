@@ -1,0 +1,13 @@
+{
+    "name": "lunch-money-mcp-ro",
+    "version": "1.0.0",
+    "description": "Token-efficient read-only MCP server for Lunch Money",
+    "type": "module",
+    "main": "lunch-money-mcp-ro.js",
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.0.1"
+    },
+    "engines": {
+        "node": ">=20.6.0"
+    }
+}
