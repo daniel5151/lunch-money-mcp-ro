@@ -16,14 +16,19 @@ This server allows LLMs (like Claude Desktop, Cursor, or other MCP clients) to r
 ## Features
 
 - **Read-Only Security**: Only retrieves data (`GET` requests). No destructive or modifying actions are supported.
+- **Strict Input Validation**: Uses `ajv` (v8) and `ajv-formats` for validating input arguments against defined tool schemas.
+- **MCP Resources**: Exposes system-level data such as accounts list and budget settings directly as MCP resources.
+- **MCP Prompts**: Includes handy pre-packaged prompts (`analyze_spending` and `find_untagged`) for spending analysis and tag suggestion.
+- **Performance Caching**: In-memory caching for `categories` and `tags` (60s TTL) to minimize redundant external API requests and lower latency.
 - **Token Efficient**: Structurally optimized JSON payloads designed to minimize prompt token overhead. Empty arrays, empty objects, null, undefined, and empty string properties are stripped recursively. Highly meaningful boolean states (like `false` for pending status) are preserved.
 - **Strict UTC Date Math**: Timeframe resolutions (like `this_month` or `last_year`) are calculated relative to UTC timezone, preventing local timezone offset shifts from altering query boundaries.
+- **Flexible Output Formatting**: All tools support a global `output_format` parameter (`"markdown"` or `"json"`). The default `"markdown"` output renders data into clean, readable Markdown tables and bullet points for the LLM.
 
 ---
 
 ## Prerequisites
 
-- **Node.js**: Version `20.6.0` or higher (utilizes native `process.loadEnvFile`). If running on Node 18 or 19, a fallback warning is printed and environment variables must be supplied manually.
+- **Node.js**: Version `20.6.0` or higher (utilizes native `process.loadEnvFile`).
 - **Lunch Money API Token**: A developer API key. You can generate one in your [Lunch Money Developer Settings](https://lunchmoney.dev/developers).
 
 ---
@@ -71,98 +76,154 @@ Alternatively, set the environment variable when configuring your MCP server:
 
 ---
 
+## MCP Resources
+
+The following resources are exposed:
+
+- **`lunchmoney://budget/settings`**: General budget settings including primary currency.
+- **`lunchmoney://accounts`**: List of all manual and Plaid-synced accounts.
+
+---
+
+## MCP Prompts
+
+The following prompts are preconfigured:
+
+- **`analyze_spending`**: Analyzes spending trends and budget summaries for a given timeframe.
+  - *Arguments*: `timeframe` (string, optional - e.g., `this_month`, `last_month`, `year_to_date`)
+- **`find_untagged`**: Identifies transactions that do not have any tags applied and suggests relevant tags.
+
+---
+
 ## Available MCP Tools
 
-Once connected, the following tools will be made available to the LLM:
+All tools accept a global parameter:
+- `output_format` (string, optional, default: `"markdown"`): Renders response as `"markdown"` (formatted tables/lists) or `"json"`.
 
 ### 1. `list_transactions`
-Search, filter, and list historical transactions. Use this to find specific purchases, filter by date ranges, or view recent spending. If 'timeframe' is omitted, provide exact start and end dates.
+Search, filter, and list historical transactions.
 - **Arguments**:
   - `start_date` (string, optional): Format `YYYY-MM-DD`
   - `end_date` (string, optional): Format `YYYY-MM-DD`
-  - `timeframe` (string, optional): Optional timeframe abstraction (`this_month`, `last_month`, `year_to_date`, `this_year`, `last_year`). If provided, start_date and end_date will be automatically calculated.
-  - `category_id` (number, optional): Filter by category ID
-  - `tag_id` (number, optional): Filter by tag ID
-  - `status` (string, optional): Filter by status (`reviewed`, `unreviewed`, `delete_pending`)
-  - `is_pending` (boolean, optional): Filter by pending status
-  - `limit` (number, optional): Maximum transactions to return (default: `50`, max: `100`). Hard-capped at 100.
-  - `offset` (number, optional): Use this for pagination. If a previous request returned 'has_more: true', pass the suggested offset here.
-  - `manual_account_id` (number, optional): Filter by manual account ID
-  - `plaid_account_id` (number, optional): Filter by Plaid account ID
-  - `recurring_id` (number, optional): Filter by recurring item ID
-  - `resolve_names` (boolean, optional): If `true`, resolves category and tag IDs to names directly in the response using cached metadata (default: `true`).
-  - `search` (string, optional): Filter transactions by payee or notes using a case-insensitive substring match. Note: Search evaluates a maximum of 2000 transactions. To search older records, you MUST specify a narrow start_date and end_date. Search is an expensive client-side operation; to avoid timeouts, always pair it with a narrow 'timeframe' or narrow date boundaries.
-  - `fields` (array of strings, optional): Sparse field filtering to minimize payload token size. If omitted, returns a default: `["id", "date", "payee", "amount", "currency", "category_name", "tag_names", "account_name", "is_split_parent", "split_parent_id", "is_group_parent", "group_parent_id", "is_transfer", "is_uncategorized"]`. Pass `["all"]` to get all fields, or specify exact fields.
+  - `timeframe` (string, optional): Predefined timeframe (`this_month`, `last_month`, `year_to_date`, `this_year`, `last_year`). Mutually exclusive with `start_date`/`end_date`.
+  - `created_since` (string, optional): Filter transactions created after this ISO 8601 timestamp.
+  - `updated_since` (string, optional): Filter transactions updated after this ISO 8601 timestamp.
+  - `manual_account_id` (integer, optional): Filter by manual account ID.
+  - `plaid_account_id` (integer, optional): Filter by Plaid-synced account ID.
+  - `recurring_id` (integer, optional): Filter by recurring transaction ID.
+  - `category_id` (integer, optional): Filter by single category ID.
+  - `category_ids` (array of integers, optional): Filter by multiple category IDs.
+  - `category_group_id` (integer, optional): Filter by parent category group ID (resolves to all child categories).
+  - `tag_id` (integer, optional): Filter by tag ID.
+  - `is_group_parent` (boolean, optional): Filter to return only parent transactions of a group.
+  - `status` (string, optional): Filter by transaction status (`reviewed`, `unreviewed`, `delete_pending`).
+  - `is_pending` (boolean, optional): Filter for pending transactions.
+  - `include_pending` (boolean, optional, default: `false`)
+  - `include_metadata` (boolean, optional, default: `false`)
+  - `include_split_parents` (boolean, optional, default: `false`)
+  - `include_group_children` (boolean, optional, default: `false`)
+  - `include_children` (boolean, optional, default: `false`)
+  - `include_files` (boolean, optional, default: `false`)
+  - `limit` (integer, optional, minimum: `1`, maximum: `2000`, default: `1000`): Maximum transactions to return.
+  - `offset` (integer, optional, minimum: `0`): Number of transactions to skip for pagination.
+  - `search` (string, optional, max 100 characters): Search term matched against payee, notes, or original name.
+  - `include_category_names` (boolean, optional, default: `false`): Resolves and includes `category_name` on each transaction.
+  - `include_tag_names` (boolean, optional, default: `false`): Resolves and includes `tag_names` and `tags` objects on each transaction.
 
 ### 2. `list_tags`
-List all tags used to organize and label transactions in the user's account.
+List all custom tags.
 - **Arguments**: None
 
 ### 3. `get_tag`
-Get details of a single tag by its ID, such as its name, description, colors, and archived status.
+Get details of a single tag by ID.
 - **Arguments** (Required):
-  - `id` (number): The unique tag identifier
+  - `id` (integer): The unique tag ID.
 
-### 4. `list_recurring_items`
-List all recurring expenses or income items, along with their schedule parameters and suggested recurring items.
+### 4. `get_tags_by_ids`
+Get details for a specific subset of tags by their IDs.
+- **Arguments** (Required):
+  - `ids` (array of integers): An array of tag IDs to resolve.
+
+### 5. `list_recurring_items`
+List recurring transaction items.
 - **Arguments** (Optional):
   - `start_date` (string): Format `YYYY-MM-DD`
   - `end_date` (string): Format `YYYY-MM-DD`
-  - `include_suggested` (boolean): If `true`, includes suggested recurring items
+  - `include_suggested` (boolean): Include system-suggested recurring items.
+  - `status` (string, enum: `["suggested", "manual", "reviewed"]`): Filter by status.
 
-### 5. `get_budget_settings`
-Get budget settings, including granularity (e.g. monthly), anchor date, rollover behavior, and income options.
-- **Arguments**: None
-
-### 6. `get_transaction`
-Get full details of a single transaction by its ID, including date, payee, amount, category, tags, notes, and split/group details.
-- **Arguments** (Required):
-  - `id` (number): The unique transaction identifier
-
-### 7. `get_budget_summary`
-Get a summary of the budget for a specific timeframe or date range, showing budgeted and available amounts by category, category totals, and rollover details.
+### 6. `get_recurring_item`
+Get details of a recurring transaction item by ID.
 - **Arguments**:
-  - `start_date` (string, optional): Format `YYYY-MM-DD` (Required if `timeframe` is omitted)
-  - `end_date` (string, optional): Format `YYYY-MM-DD` (Required if `timeframe` is omitted)
-  - `timeframe` (string, optional): Pre-defined period (`this_month`, `last_month`, `year_to_date`, `this_year`, `last_year`). Calculates start and end dates automatically.
-  - `format` (string, optional): Output shape (`nested` or `flattened`, default: `flattened` for token efficiency)
-  - `include_totals` (boolean, optional): Include overall totals (default: `false`)
-  - `include_rollover_pool` (boolean, optional): Include rollover pool details (default: `false`)
-  - `include_exclude_from_budgets` (boolean, optional): Include budget-excluded categories (default: `false`)
-  - `include_occurrences` (boolean, optional): Include occurrence details (default: `false`)
-  - `include_past_budget_dates` (boolean, optional): Include past budget dates (default: `false`)
-  - `fields` (array of strings, optional): Sparse field filtering for categories. Defaults to `["category_id", "budgeted", "available"]`.
+  - `id` (integer, Required): The unique recurring item ID.
+  - `start_date` (string, optional): Start date for calculating occurrences (YYYY-MM-DD).
+  - `end_date` (string, optional): End date for calculating occurrences (YYYY-MM-DD).
 
-### 8. `list_categories`
-List all budgeting categories. Can be returned as a nested tree or a flat list, and can be filtered by whether they are category groups.
-- **Arguments** (Optional):
-  - `format` (string): Format structure (`nested` or `flattened`, default: `nested`)
-  - `is_group` (boolean): Filter by category group status
-
-### 9. `get_category`
-Get details of a single budgeting category by its ID, such as its name, group status, and sub-categories.
-- **Arguments** (Required):
-  - `id` (number): The unique category identifier
-
-### 10. `list_accounts`
-List all financial accounts (both manual and Plaid-synced) with their current balances, status, and metadata.
+### 7. `get_budget_settings`
+Get general budget settings including currency.
 - **Arguments**: None
 
-### 11. `get_manual_account`
-Get details of a manual account by its ID, including its current balance, currency, type, and status.
-- **Arguments** (Required):
-  - `id` (number): The unique manual account identifier
+### 8. `get_budget_summary`
+Get budget summary with category totals and usage.
+- **Arguments**:
+  - `start_date` (string, optional): Start date (Required if `timeframe` is omitted).
+  - `end_date` (string, optional): End date (Required if `timeframe` is omitted).
+  - `timeframe` (string, optional): Predefined timeframe (`this_month`, `last_month`, `year_to_date`, `this_year`, `last_year`). Mutually exclusive with `start_date`/`end_date`.
+  - `include_exclude_from_budgets` (boolean, optional, default: `false`)
+  - `include_occurrences` (boolean, optional, default: `false`)
+  - `include_past_budget_dates` (boolean, optional, default: `false`)
+  - `include_totals` (boolean, optional, default: `false`)
+  - `include_rollover_pool` (boolean, optional, default: `false`)
 
-### 12. `get_plaid_account`
-Get details of a Plaid-synced bank or credit card account by its ID, including its name, institution, balance, and status.
-- **Arguments** (Required):
-  - `id` (number): The unique Plaid account identifier
+### 9. `list_categories`
+List all categories.
+- **Arguments** (Optional):
+  - `format` (string, enum: `["nested", "flattened"]`, default: `"nested"`): Format of the categories list.
+  - `is_group` (boolean): Filter for category groups.
 
-### 13. `get_account`
-Get details of a single account by its ID. Automatically detects and handles both manual and Plaid-synced accounts.
+### 10. `get_category`
+Get details of a single category by ID.
 - **Arguments** (Required):
-  - `id` (number): The unique account identifier
+  - `id` (integer): The unique category ID.
 
-### 14. `get_current_user`
-Get profile details for the currently logged-in user, including their name, email, user ID, and primary currency.
+### 11. `get_categories_by_ids`
+Get details for a specific subset of categories by their IDs.
+- **Arguments** (Required):
+  - `ids` (array of integers): An array of category IDs to resolve.
+
+### 12. `list_accounts`
+List all manual and Plaid-synced accounts.
+- **Arguments**: None
+
+### 13. `get_manual_account`
+Get details of a manual account by ID.
+- **Arguments** (Required):
+  - `id` (integer): The unique manual account ID.
+
+### 14. `get_plaid_account`
+Get details of a Plaid-synced account by ID.
+- **Arguments** (Required):
+  - `id` (integer): The unique Plaid account ID.
+
+### 15. `get_account`
+Get details of an account by ID, checking both manual and Plaid-synced accounts.
+- **Arguments** (Required):
+  - `id` (integer): The unique account ID.
+
+### 16. `get_current_user`
+Get the current user's profile information.
+- **Arguments**: None
+
+### 17. `get_transaction`
+Get details of a single transaction by ID.
+- **Arguments** (Required):
+  - `id` (integer): The unique transaction ID.
+
+### 18. `get_transaction_attachment_url`
+Get a temporary download URL for a transaction attachment.
+- **Arguments** (Required):
+  - `file_id` (integer): The ID of the attachment file.
+
+### 19. `clear_cache`
+Clear the cached accounts data.
 - **Arguments**: None
