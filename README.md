@@ -102,6 +102,11 @@ All tools accept a global parameter:
 
 ### 1. `list_transactions`
 Search, filter, and list historical transactions.
+
+> [!NOTE]
+> **Performance & Recursive Fetching**
+> Using `search`, `category_ids`, or `category_group_id` triggers in-memory filtering because the Lunch Money API doesn't support these parameters natively. The server will recursively page through the API (up to a safety limit of 50,000 transactions) to retrieve the complete candidate set. Always specify a timeframe (e.g. `this_month`, `year_to_date`) when using these filters to optimize performance and avoid excessive API requests.
+
 - **Arguments**:
   - `start_date` (string, optional): Format `YYYY-MM-DD`
   - `end_date` (string, optional): Format `YYYY-MM-DD`

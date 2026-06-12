@@ -716,21 +716,55 @@ const toolHandlers = {
         const apiLimit = apiArgs.limit;
         const apiOffset = apiArgs.offset;
         
-        if (serverSideFiltering) {
-            // Fetch maximum in one batch from the API, we'll slice/paginate in-memory
-            apiArgs.limit = 2000;
+        const needsInMemoryFiltering = serverSideFiltering || !!search;
+
+        let allTransactions = [];
+        let finalHasMore = false;
+
+        if (needsInMemoryFiltering) {
+            let currentOffset = 0;
+            const batchLimit = 2000;
+
+            // Remove pagination fields from root arguments since we will manage them in the loop
+            delete apiArgs.limit;
             delete apiArgs.offset;
+
+            let pagesFetched = 0;
+            const maxPages = 25; // Safety cap of 50,000 transactions to prevent runaway loops
+
+            while (pagesFetched < maxPages) {
+                const queryArgs = {
+                    ...apiArgs,
+                    limit: batchLimit,
+                    offset: currentOffset
+                };
+
+                const { status, body } = await nativeFetch(`/transactions${buildQueryString(queryArgs)}`, "GET", LM_API_TOKEN);
+                if (status !== 200) return mcpResponse.error(`Transactions retrieval error: ${extractError(body, status)}`);
+
+                const fetched = body.transactions || [];
+                allTransactions = allTransactions.concat(fetched);
+                pagesFetched++;
+
+                if (!body.has_more || fetched.length < batchLimit) {
+                    break;
+                }
+                currentOffset += fetched.length;
+            }
         } else {
-            // Clamp values defensively to fit inside [1, 2000] constraints per OpenAPI boundaries
+            // Native path: clamp values and query once
             const requestedLimit = apiArgs.limit !== undefined ? apiArgs.limit : 1000;
             apiArgs.limit = Math.max(1, Math.min(requestedLimit, 2000));
+
+            const { status, body } = await nativeFetch(`/transactions${buildQueryString(apiArgs)}`, "GET", LM_API_TOKEN);
+            if (status !== 200) return mcpResponse.error(`Transactions retrieval error: ${extractError(body, status)}`);
+
+            allTransactions = body.transactions || [];
+            finalHasMore = body.has_more || false;
         }
 
-        const { status, body } = await nativeFetch(`/transactions${buildQueryString(apiArgs)}`, "GET", LM_API_TOKEN);
-        if (status !== 200) return mcpResponse.error(`Transactions retrieval error: ${extractError(body, status)}`);
+        let result = allTransactions;
 
-        let result = body.transactions || [];
-        
         // Filter in-memory by category IDs if server-side filtering is active
         if (serverSideFiltering) {
             result = result.filter(t => t.category_id !== null && t.category_id !== undefined && matchingCategoryIds.has(t.category_id));
@@ -746,7 +780,17 @@ const toolHandlers = {
             );
         }
 
-        // Resolve and join category and/or tag names if requested
+        // Apply pagination parameters in-memory if we did in-memory filtering
+        if (needsInMemoryFiltering) {
+            const requestedOffset = apiOffset || 0;
+            const requestedLimit = apiLimit !== undefined ? apiLimit : 1000;
+            const slicedResult = result.slice(requestedOffset, requestedOffset + requestedLimit);
+
+            finalHasMore = (requestedOffset + requestedLimit < result.length);
+            result = slicedResult;
+        }
+
+        // Resolve and join category and/or tag names if requested (Optimized: done after slicing)
         if (include_category_names || include_tag_names) {
             let categoryMap = null;
             let tagMap = null;
@@ -770,17 +814,6 @@ const toolHandlers = {
                     t.tag_names = t.tags.map(tag => tag.name);
                 }
             }
-        }
-
-        // Apply pagination parameters in-memory if we are doing server-side filtering
-        let finalHasMore = body.has_more || false;
-        if (serverSideFiltering) {
-            const requestedOffset = apiOffset || 0;
-            const requestedLimit = apiLimit || 1000;
-            const slicedResult = result.slice(requestedOffset, requestedOffset + requestedLimit);
-            
-            finalHasMore = (requestedOffset + requestedLimit < result.length) || (body.has_more || false);
-            result = slicedResult;
         }
 
         return mcpResponse.success({
@@ -928,7 +961,7 @@ const TOOLS = [
     },
     {
         name: "list_transactions",
-        description: "List transactions with optional filtering and search.",
+        description: "List transactions. Note: Filtering by search, category_ids, or category_group_id uses recursive fetching. Use a timeframe to avoid rate limits.",
         inputSchema: {
             type: "object",
             properties: {
@@ -944,11 +977,11 @@ const TOOLS = [
                 category_ids: { 
                     type: "array", 
                     items: { type: "integer" }, 
-                    description: "Filter by multiple category IDs. Transactions matching any of these categories will be returned." 
+                    description: "Filter by multiple category IDs." 
                 },
                 category_group_id: { 
                     type: "integer", 
-                    description: "Filter by parent category group ID. All transactions in the group's child categories will be returned." 
+                    description: "Filter by parent category group ID (includes child categories)." 
                 },
                 tag_id: { type: "integer", description: "Filter by tag ID." },
                 is_group_parent: { type: "boolean", description: "Filter to return only parent transactions of a group." },
@@ -966,12 +999,12 @@ const TOOLS = [
                 include_category_names: { 
                     type: "boolean", 
                     default: false, 
-                    description: "If true, resolves and includes category_name on each transaction." 
+                    description: "Resolve and include category_name." 
                 },
                 include_tag_names: { 
                     type: "boolean", 
                     default: false, 
-                    description: "If true, resolves and includes tag_names and tags objects on each transaction." 
+                    description: "Resolve and include tags and tag_names." 
                 }
             },
             oneOf: [
