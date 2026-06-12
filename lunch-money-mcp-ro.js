@@ -3,7 +3,27 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { 
+    ListToolsRequestSchema, 
+    CallToolRequestSchema, 
+    ListResourcesRequestSchema, 
+    ReadResourceRequestSchema, 
+    ListPromptsRequestSchema, 
+    GetPromptRequestSchema, 
+    McpError, 
+    ErrorCode 
+} from "@modelcontextprotocol/sdk/types.js";
+import Ajv from 'ajv';
+import addFormats from 'ajv-formats';
+
+const ajv = new Ajv({
+    allErrors: true,
+    coerceTypes: true,
+    useDefaults: true
+});
+addFormats(ajv);
+
+const validators = {};
 
 // ==========================================
 // 1. INITIALIZATION & ENVIRONMENT LOADING
@@ -37,6 +57,20 @@ const accountsCache = {
     lastFetched: 0,
     promise: null,
     TTL: 60 * 1000 
+};
+
+const categoriesCache = {
+    data: null,
+    lastFetched: 0,
+    promise: null,
+    TTL: 60 * 1000
+};
+
+const tagsCache = {
+    data: null,
+    lastFetched: 0,
+    promise: null,
+    TTL: 60 * 1000
 };
 
 // ==========================================
@@ -195,8 +229,180 @@ async function getAccountsData(token) {
     return accountsCache.promise;
 }
 
+async function getCategoriesData(token) {
+    const now = Date.now();
+    if (categoriesCache.data && (now - categoriesCache.lastFetched <= categoriesCache.TTL)) return categoriesCache.data;
+    if (categoriesCache.promise) return categoriesCache.promise;
+
+    categoriesCache.promise = (async () => {
+        const { status, body } = await nativeFetch("/categories", "GET", token);
+        if (status !== 200 && status !== 201) throw new Error(`Categories fetch failed: ${extractError(body, status)}`);
+        categoriesCache.data = body.categories || [];
+        categoriesCache.lastFetched = Date.now();
+        return categoriesCache.data;
+    })().finally(() => {
+        categoriesCache.promise = null;
+    });
+    return categoriesCache.promise;
+}
+
+async function getTagsData(token) {
+    const now = Date.now();
+    if (tagsCache.data && (now - tagsCache.lastFetched <= tagsCache.TTL)) return tagsCache.data;
+    if (tagsCache.promise) return tagsCache.promise;
+
+    tagsCache.promise = (async () => {
+        const { status, body } = await nativeFetch("/tags", "GET", token);
+        if (status !== 200) throw new Error(`Tags fetch failed: ${extractError(body, status)}`);
+        const tagsArray = body && body.tags ? body.tags : (Array.isArray(body) ? body : []);
+        tagsCache.data = tagsArray;
+        tagsCache.lastFetched = Date.now();
+        return tagsCache.data;
+    })().finally(() => {
+        tagsCache.promise = null;
+    });
+    return tagsCache.promise;
+}
+
+function generateMarkdown(data) {
+    if (!data) return "";
+    
+    // 1. Transactions List
+    if (data.transactions && Array.isArray(data.transactions)) {
+        if (data.transactions.length === 0) return "No transactions found.";
+        let md = "### Transactions\n\n";
+        md += "| ID | Date | Payee | Amount | Currency | Category | Status |\n";
+        md += "| --- | --- | --- | --- | --- | --- | --- |\n";
+        for (const t of data.transactions) {
+            const cat = t.category_name || t.category_id || "Uncategorized";
+            md += `| ${t.id} | ${t.date} | ${t.payee || ""} | ${t.amount} | ${t.currency} | ${cat} | ${t.status} |\n`;
+        }
+        if (data.has_more) {
+            md += "\n*Note: There are more transactions available (has_more: true).*";
+        }
+        return md;
+    }
+    
+    // 2. Transaction Detail (Single)
+    if (data.id && data.amount !== undefined && data.date !== undefined && (data.payee !== undefined || data.original_name !== undefined)) {
+        let md = `### Transaction #${data.id}\n\n`;
+        md += `- **Date**: ${data.date}\n`;
+        md += `- **Payee**: ${data.payee || ""}\n`;
+        if (data.original_name) md += `- **Original Name**: ${data.original_name}\n`;
+        md += `- **Amount**: ${data.amount} ${data.currency}\n`;
+        md += `- **Status**: ${data.status}\n`;
+        if (data.category_name) md += `- **Category**: ${data.category_name} (${data.category_id})\n`;
+        else if (data.category_id) md += `- **Category ID**: ${data.category_id}\n`;
+        if (data.notes) md += `- **Notes**: ${data.notes}\n`;
+        if (data.tags && data.tags.length > 0) {
+            md += `- **Tags**: ${data.tags.map(t => t.name).join(", ")}\n`;
+        }
+        return md;
+    }
+
+    // 3. Accounts List
+    if (data.manual || data.synced) {
+        let md = "### Accounts\n\n";
+        if (data.manual && data.manual.length > 0) {
+            md += "#### Manual Accounts\n\n";
+            md += "| ID | Name | Type | Balance | Currency |\n";
+            md += "| --- | --- | --- | --- | --- |\n";
+            for (const a of data.manual) {
+                md += `| ${a.id} | ${a.name} | ${a.type} | ${a.balance} | ${a.currency} |\n`;
+            }
+            md += "\n";
+        }
+        if (data.synced && data.synced.length > 0) {
+            md += "#### Plaid Synced Accounts\n\n";
+            md += "| ID | Name | Institution | Balance | Currency | Last Imported |\n";
+            md += "| --- | --- | --- | --- | --- | --- |\n";
+            for (const a of data.synced) {
+                md += `| ${a.id} | ${a.name} | ${a.institution_name || ""} | ${a.balance} | ${a.currency} | ${a.last_import || ""} |\n`;
+            }
+        }
+        return md;
+    }
+
+    // 4. Categories List
+    if (data.categories && Array.isArray(data.categories) && !data.aligned) {
+        if (data.categories.length === 0) return "No categories found.";
+        let md = "### Categories\n\n";
+        md += "| ID | Name | Group? | Group ID | Description |\n";
+        md += "| --- | --- | --- | --- | --- |\n";
+        for (const c of data.categories) {
+            md += `| ${c.id} | ${c.name} | ${c.is_group ? "Yes" : "No"} | ${c.group_id || ""} | ${c.description || ""} |\n`;
+        }
+        return md;
+    }
+
+    // 5. Tags List
+    if (data.tags && Array.isArray(data.tags)) {
+        if (data.tags.length === 0) return "No tags found.";
+        let md = "### Tags\n\n";
+        md += "| ID | Name | Description |\n";
+        md += "| --- | --- | --- |\n";
+        for (const t of data.tags) {
+            md += `| ${t.id} | ${t.name} | ${t.description || ""} |\n`;
+        }
+        return md;
+    }
+
+    // 6. Budget Summary
+    if (data.categories && data.aligned !== undefined) {
+        let md = "### Budget Summary\n\n";
+        md += "| Category | Budgeted | Actual Activity | Available |\n";
+        md += "| --- | --- | --- | --- |\n";
+        for (const item of data.categories) {
+            const catIdentifier = item.category_name ? `${item.category_name} (${item.category_id})` : item.category_id;
+            const budgeted = item.totals.budgeted !== null ? item.totals.budgeted : "Not set";
+            const actual = (item.totals.other_activity || 0) + (item.totals.recurring_activity || 0);
+            const available = item.totals.available;
+            md += `| ${catIdentifier} | ${budgeted} | ${actual} | ${available} |\n`;
+        }
+        return md;
+    }
+
+    // 7. Single Category
+    if (data.id && data.name && data.exclude_from_budget !== undefined) {
+        let md = `### Category: ${data.name} (#${data.id})\n\n`;
+        md += `- **Description**: ${data.description || "None"}\n`;
+        md += `- **Is Group**: ${data.is_group ? "Yes" : "No"}\n`;
+        if (data.group_id) md += `- **Group ID**: ${data.group_id}\n`;
+        md += `- **Exclude from Budget**: ${data.exclude_from_budget ? "Yes" : "No"}\n`;
+        md += `- **Exclude from Totals**: ${data.exclude_from_totals ? "Yes" : "No"}\n`;
+        return md;
+    }
+
+    // 8. Single Tag
+    if (data.id && data.name && data.background_color !== undefined) {
+        let md = `### Tag: ${data.name} (#${data.id})\n\n`;
+        if (data.description) md += `- **Description**: ${data.description}\n`;
+        return md;
+    }
+
+    // 9. Current User
+    if (data.name && data.email && data.account_id !== undefined) {
+        let md = `### User Profile: ${data.name}\n\n`;
+        md += `- **Email**: ${data.email}\n`;
+        md += `- **Account ID**: ${data.account_id}\n`;
+        md += `- **Budget Name**: ${data.budget_name}\n`;
+        md += `- **Primary Currency**: ${data.primary_currency}\n`;
+        return md;
+    }
+
+    return "";
+}
+
 const mcpResponse = {
-    success: (data) => ({ content: [{ type: "text", text: JSON.stringify(cleanObject(data) || {}) }] }),
+    success: (data) => {
+        const cleaned = cleanObject(data) || {};
+        const markdown = generateMarkdown(cleaned);
+        return {
+            content: [{ type: "text", text: JSON.stringify(cleaned) }],
+            _mcp_raw_data: cleaned,
+            ...(markdown && { _mcp_markdown: markdown })
+        };
+    },
     error: (msg) => ({ content: [{ type: "text", text: `Error processing operation: ${msg}` }], isError: true })
 };
 
@@ -207,6 +413,10 @@ const toolHandlers = {
     "clear_cache": async () => {
         accountsCache.data = null;
         accountsCache.lastFetched = 0;
+        categoriesCache.data = null;
+        categoriesCache.lastFetched = 0;
+        tagsCache.data = null;
+        tagsCache.lastFetched = 0;
         return mcpResponse.success({ message: "Internal memory cache cleared successfully." });
     },
 
@@ -218,7 +428,7 @@ const toolHandlers = {
 
     "get_transaction": async (args) => {
         const { id } = args || {};
-        if (!id) return mcpResponse.error("Missing required argument 'id'");
+        if (!id) return mcpResponse.error("Missing required parameter 'id'");
         const safeId = encodeURIComponent(String(id));
         const { status, body } = await nativeFetch(`/transactions/${safeId}`, "GET", LM_API_TOKEN);
         if (status !== 200) return mcpResponse.error(`Failed lookup (Status ${status}): ${extractError(body, status)}`);
@@ -227,7 +437,7 @@ const toolHandlers = {
 
     "get_category": async (args) => {
         const { id } = args || {};
-        if (!id) return mcpResponse.error("Missing expected parameter: id");
+        if (!id) return mcpResponse.error("Missing required parameter 'id'");
         const safeId = encodeURIComponent(String(id));
         const { status, body } = await nativeFetch(`/categories/${safeId}`, "GET", LM_API_TOKEN);
         
@@ -238,18 +448,40 @@ const toolHandlers = {
         return mcpResponse.success(body);
     },
 
+    "get_categories_by_ids": async (args) => {
+        const { ids } = args || {};
+        if (!ids || !Array.isArray(ids) || ids.length === 0) {
+            return mcpResponse.error("Missing or invalid parameter 'ids'. Must be a non-empty array of integers.");
+        }
+        const categories = await getCategoriesData(LM_API_TOKEN).catch(() => []);
+        const idSet = new Set(ids.map(Number));
+        const filtered = categories.filter(c => idSet.has(c.id));
+        return mcpResponse.success({ categories: filtered });
+    },
+
     "get_tag": async (args) => {
         const { id } = args || {};
-        if (!id) return mcpResponse.error("Missing expected parameter: id");
+        if (!id) return mcpResponse.error("Missing required parameter 'id'");
         const safeId = encodeURIComponent(String(id));
         const { status, body } = await nativeFetch(`/tags/${safeId}`, "GET", LM_API_TOKEN);
         if (status !== 200 && status !== 201) return mcpResponse.error(`Tag lookup failure (Status ${status}): ${extractError(body, status)}`);
         return mcpResponse.success(body);
     },
 
+    "get_tags_by_ids": async (args) => {
+        const { ids } = args || {};
+        if (!ids || !Array.isArray(ids) || ids.length === 0) {
+            return mcpResponse.error("Missing or invalid parameter 'ids'. Must be a non-empty array of integers.");
+        }
+        const tags = await getTagsData(LM_API_TOKEN).catch(() => []);
+        const idSet = new Set(ids.map(Number));
+        const filtered = tags.filter(t => idSet.has(t.id));
+        return mcpResponse.success({ tags: filtered });
+    },
+
     "get_account": async (args) => {
         const { id } = args || {};
-        if (!id) return mcpResponse.error("Missing required argument 'id'");
+        if (!id) return mcpResponse.error("Missing required parameter 'id'");
         const safeId = encodeURIComponent(String(id));
         
         const mRes = await nativeFetch(`/manual_accounts/${safeId}`, "GET", LM_API_TOKEN);
@@ -263,7 +495,7 @@ const toolHandlers = {
 
     "get_manual_account": async (args) => {
         const { id } = args || {};
-        if (!id) return mcpResponse.error("Missing expected parameter 'id'");
+        if (!id) return mcpResponse.error("Missing required parameter 'id'");
         const safeId = encodeURIComponent(String(id));
         const { status, body } = await nativeFetch(`/manual_accounts/${safeId}`, "GET", LM_API_TOKEN);
         if (status !== 200) return mcpResponse.error(`Manual account fetch error: ${extractError(body, status)}`);
@@ -272,7 +504,7 @@ const toolHandlers = {
 
     "get_plaid_account": async (args) => {
         const { id } = args || {};
-        if (!id) return mcpResponse.error("Missing expected parameter 'id'");
+        if (!id) return mcpResponse.error("Missing required parameter 'id'");
         const safeId = encodeURIComponent(String(id));
         const { status, body } = await nativeFetch(`/plaid_accounts/${safeId}`, "GET", LM_API_TOKEN);
         if (status !== 200) return mcpResponse.error(`Plaid account fetch error: ${extractError(body, status)}`);
@@ -290,13 +522,23 @@ const toolHandlers = {
         if (args && args.is_group !== undefined) cleanArgs.is_group = args.is_group;
         const { status, body } = await nativeFetch(`/categories${buildQueryString(cleanArgs)}`, "GET", LM_API_TOKEN);
         if (status !== 200 && status !== 201) return mcpResponse.error(`Failed retrieving categories: ${extractError(body, status)}`);
+        
+        if (args && args.format === "flattened" && body && Array.isArray(body.categories)) {
+            body.categories = body.categories.map(c => ({
+                ...c,
+                children: null
+            }));
+        }
+        
         return mcpResponse.success(body);
     },
 
     "list_tags": async () => {
         const { status, body } = await nativeFetch("/tags", "GET", LM_API_TOKEN);
         if (status !== 200) return mcpResponse.error(`Error retrieving tags: ${extractError(body, status)}`);
-        return mcpResponse.success(body);
+        // Handle if body is already wrapped or is a raw array, unpack to ensure clean shape
+        const tagsArray = body && body.tags ? body.tags : (Array.isArray(body) ? body : []);
+        return mcpResponse.success({ tags: tagsArray });
     },
 
     "list_recurring_items": async (args) => {
@@ -305,14 +547,33 @@ const toolHandlers = {
         if (args && args.end_date !== undefined) cleanArgs.end_date = args.end_date;
         if (args && args.include_suggested !== undefined) cleanArgs.include_suggested = args.include_suggested;
 
-        const { status, body } = await nativeFetch(`/recurring_items${buildQueryString(cleanArgs)}`, "GET", LM_API_TOKEN);
-        if (status !== 200) return mcpResponse.error(`Failed retrieving recurring items: ${extractError(body, status)}`);
-        return mcpResponse.success(body);
+        // If the user specified status === "suggested", we must ensure include_suggested is true
+        if (args && args.status === "suggested" && cleanArgs.include_suggested === undefined) {
+            cleanArgs.include_suggested = true;
+        }
+
+        const { status: fetchStatus, body } = await nativeFetch(`/recurring_items${buildQueryString(cleanArgs)}`, "GET", LM_API_TOKEN);
+        if (fetchStatus !== 200) return mcpResponse.error(`Failed retrieving recurring items: ${extractError(body, fetchStatus)}`);
+        
+        let result = body.recurring_items || [];
+        if (args && args.status !== undefined) {
+            const statusFilter = args.status;
+            result = result.filter(item => {
+                if (statusFilter === "suggested") {
+                    return item.status === "suggested";
+                } else if (statusFilter === "manual" || statusFilter === "reviewed") {
+                    return item.status === "reviewed";
+                }
+                return true;
+            });
+        }
+        
+        return mcpResponse.success({ recurring_items: result });
     },
 
     "get_recurring_item": async (args) => {
         const { id, start_date, end_date } = args || {};
-        if (!id) return mcpResponse.error("Missing required argument 'id'");
+        if (!id) return mcpResponse.error("Missing required parameter 'id'");
         const safeId = encodeURIComponent(String(id));
         const cleanArgs = {};
         if (start_date) cleanArgs.start_date = start_date;
@@ -351,13 +612,43 @@ const toolHandlers = {
             apiArgs.end_date = endDate;
         }
 
-        const { status, body } = await nativeFetch(`/summary${buildQueryString(apiArgs)}`, "GET", LM_API_TOKEN);
-        if (status !== 200) return mcpResponse.error(`Failed parsing budget summary: ${extractError(body, status)}`);
+        const [summaryRes, categoriesRes] = await Promise.all([
+            nativeFetch(`/summary${buildQueryString(apiArgs)}`, "GET", LM_API_TOKEN),
+            nativeFetch("/categories", "GET", LM_API_TOKEN).catch(() => null)
+        ]);
+
+        if (summaryRes.status !== 200) {
+            return mcpResponse.error(`Failed parsing budget summary: ${extractError(summaryRes.body, summaryRes.status)}`);
+        }
+
+        const body = summaryRes.body;
+
+        // Build category map if available to resolve category IDs to names
+        const categoryMap = new Map();
+        if (categoriesRes && (categoriesRes.status === 200 || categoriesRes.status === 201) && categoriesRes.body && Array.isArray(categoriesRes.body.categories)) {
+            for (const cat of categoriesRes.body.categories) {
+                categoryMap.set(cat.id, cat.name);
+            }
+        }
+
+        // Resolve names in categories array
+        if (body && Array.isArray(body.categories)) {
+            body.categories = body.categories.map(item => {
+                if (item.category_id && categoryMap.has(item.category_id)) {
+                    return {
+                        ...item,
+                        category_name: categoryMap.get(item.category_id)
+                    };
+                }
+                return item;
+            });
+        }
+
         return mcpResponse.success(body);
     },
 
     "list_transactions": async (args) => {
-        const { timeframe, search } = args || {};
+        const { timeframe, search, include_category_names, include_tag_names, category_ids, category_group_id } = args || {};
         const apiArgs = {};
         
         // Includes 'offset' to enable proper native loop pagination capabilities
@@ -376,14 +667,76 @@ const toolHandlers = {
             apiArgs.end_date = endDate;
         }
 
-        // Clamp values defensively to fit inside [1, 2000] constraints per OpenAPI boundaries
-        const requestedLimit = apiArgs.limit !== undefined ? apiArgs.limit : 1000;
-        apiArgs.limit = Math.max(1, Math.min(requestedLimit, 2000));
+        // Resolve child categories if filtering by group
+        let matchingCategoryIds = null;
+        if (category_group_id !== undefined) {
+            const categories = await getCategoriesData(LM_API_TOKEN).catch(() => []);
+            matchingCategoryIds = new Set();
+            matchingCategoryIds.add(category_group_id);
+            for (const cat of categories) {
+                if (cat.group_id === category_group_id) {
+                    matchingCategoryIds.add(cat.id);
+                }
+            }
+        }
+
+        // Handle array of category IDs
+        if (category_ids && Array.isArray(category_ids) && category_ids.length > 0) {
+            if (matchingCategoryIds === null) {
+                matchingCategoryIds = new Set(category_ids.map(Number));
+            } else {
+                // Intersect with existing group filter
+                const newSet = new Set();
+                for (const cid of category_ids) {
+                    const numCid = Number(cid);
+                    if (matchingCategoryIds.has(numCid)) {
+                        newSet.add(numCid);
+                    }
+                }
+                matchingCategoryIds = newSet;
+            }
+        }
+
+        // If filtering by categories result in an empty set, short-circuit
+        if (matchingCategoryIds !== null && matchingCategoryIds.size === 0) {
+            return mcpResponse.success({
+                transactions: [],
+                has_more: false
+            });
+        }
+
+        // Optimize single category ID matching to allow remote DB filtering
+        if (matchingCategoryIds !== null && matchingCategoryIds.size === 1) {
+            apiArgs.category_id = Array.from(matchingCategoryIds)[0];
+        }
+
+        // Decide if we need to do server-side category filtering
+        const serverSideFiltering = matchingCategoryIds !== null && !apiArgs.category_id;
+        
+        const apiLimit = apiArgs.limit;
+        const apiOffset = apiArgs.offset;
+        
+        if (serverSideFiltering) {
+            // Fetch maximum in one batch from the API, we'll slice/paginate in-memory
+            apiArgs.limit = 2000;
+            delete apiArgs.offset;
+        } else {
+            // Clamp values defensively to fit inside [1, 2000] constraints per OpenAPI boundaries
+            const requestedLimit = apiArgs.limit !== undefined ? apiArgs.limit : 1000;
+            apiArgs.limit = Math.max(1, Math.min(requestedLimit, 2000));
+        }
 
         const { status, body } = await nativeFetch(`/transactions${buildQueryString(apiArgs)}`, "GET", LM_API_TOKEN);
         if (status !== 200) return mcpResponse.error(`Transactions retrieval error: ${extractError(body, status)}`);
 
         let result = body.transactions || [];
+        
+        // Filter in-memory by category IDs if server-side filtering is active
+        if (serverSideFiltering) {
+            result = result.filter(t => t.category_id !== null && t.category_id !== undefined && matchingCategoryIds.has(t.category_id));
+        }
+
+        // Filter in-memory by search term
         if (search) {
             const query = String(search).toLowerCase();
             result = result.filter(t => 
@@ -393,9 +746,46 @@ const toolHandlers = {
             );
         }
 
+        // Resolve and join category and/or tag names if requested
+        if (include_category_names || include_tag_names) {
+            let categoryMap = null;
+            let tagMap = null;
+
+            if (include_category_names) {
+                const categories = await getCategoriesData(LM_API_TOKEN).catch(() => []);
+                categoryMap = new Map(categories.map(c => [c.id, c.name]));
+            }
+
+            if (include_tag_names) {
+                const tags = await getTagsData(LM_API_TOKEN).catch(() => []);
+                tagMap = new Map(tags.map(t => [t.id, t]));
+            }
+
+            for (const t of result) {
+                if (include_category_names && t.category_id !== null && t.category_id !== undefined) {
+                    t.category_name = categoryMap?.get(t.category_id) || null;
+                }
+                if (include_tag_names && t.tag_ids && Array.isArray(t.tag_ids)) {
+                    t.tags = t.tag_ids.map(id => tagMap?.get(id)).filter(Boolean);
+                    t.tag_names = t.tags.map(tag => tag.name);
+                }
+            }
+        }
+
+        // Apply pagination parameters in-memory if we are doing server-side filtering
+        let finalHasMore = body.has_more || false;
+        if (serverSideFiltering) {
+            const requestedOffset = apiOffset || 0;
+            const requestedLimit = apiLimit || 1000;
+            const slicedResult = result.slice(requestedOffset, requestedOffset + requestedLimit);
+            
+            finalHasMore = (requestedOffset + requestedLimit < result.length) || (body.has_more || false);
+            result = slicedResult;
+        }
+
         return mcpResponse.success({
             transactions: result,
-            has_more: body.has_more || false
+            has_more: finalHasMore
         });
     },
 
@@ -412,202 +802,502 @@ const toolHandlers = {
 // ==========================================
 // 5. MCP SERVER INTERFACE BRIDGE
 // ==========================================
+const TOOLS = [
+    { 
+        name: "clear_cache", 
+        description: "Clear the cached accounts data.", 
+        inputSchema: { type: "object", properties: {} } 
+    },
+    { 
+        name: "get_current_user", 
+        description: "Get the current user's profile information.", 
+        inputSchema: { type: "object", properties: {} } 
+    },
+    { 
+        name: "get_transaction", 
+        description: "Get details of a single transaction by ID.", 
+        inputSchema: { 
+            type: "object", 
+            properties: { 
+                id: { type: "integer", description: "The unique transaction ID." } 
+            }, 
+            required: ["id"] 
+        } 
+    },
+    { 
+        name: "get_category", 
+        description: "Get details of a single category by ID.", 
+        inputSchema: { 
+            type: "object", 
+            properties: { 
+                id: { type: "integer", description: "The unique category ID." } 
+            }, 
+            required: ["id"] 
+        } 
+    },
+    { 
+        name: "get_categories_by_ids", 
+        description: "Get details for a specific subset of categories by their IDs.", 
+        inputSchema: { 
+            type: "object", 
+            properties: { 
+                ids: { 
+                    type: "array", 
+                    items: { type: "integer" }, 
+                    description: "An array of category IDs to resolve." 
+                } 
+            }, 
+            required: ["ids"] 
+        } 
+    },
+    { 
+        name: "get_tag", 
+        description: "Get details of a single tag by ID.", 
+        inputSchema: { 
+            type: "object", 
+            properties: { 
+                id: { type: "integer", description: "The unique tag ID." } 
+            }, 
+            required: ["id"] 
+        } 
+    },
+    { 
+        name: "get_tags_by_ids", 
+        description: "Get details for a specific subset of tags by their IDs.", 
+        inputSchema: { 
+            type: "object", 
+            properties: { 
+                ids: { 
+                    type: "array", 
+                    items: { type: "integer" }, 
+                    description: "An array of tag IDs to resolve." 
+                } 
+            }, 
+            required: ["ids"] 
+        } 
+    },
+    { 
+        name: "get_recurring_item", 
+        description: "Get details of a recurring transaction item by ID.", 
+        inputSchema: { 
+            type: "object", 
+            properties: { 
+                id: { type: "integer", description: "The unique recurring item ID." },
+                start_date: { type: "string", format: "date", description: "Start date for calculating occurrences (YYYY-MM-DD)." },
+                end_date: { type: "string", format: "date", description: "End date for calculating occurrences (YYYY-MM-DD)." }
+            }, 
+            required: ["id"],
+            dependencies: {
+                start_date: ["end_date"],
+                end_date: ["start_date"]
+            }
+        } 
+    },
+    { 
+        name: "get_manual_account", 
+        description: "Get details of a manual account by ID.", 
+        inputSchema: { 
+            type: "object", 
+            properties: { 
+                id: { type: "integer", description: "The unique manual account ID." } 
+            }, 
+            required: ["id"] 
+        } 
+    },
+    { 
+        name: "get_plaid_account", 
+        description: "Get details of a Plaid-synced account by ID.", 
+        inputSchema: { 
+            type: "object", 
+            properties: { 
+                id: { type: "integer", description: "The unique Plaid account ID." } 
+            }, 
+            required: ["id"] 
+        } 
+    },
+    { 
+        name: "get_account", 
+        description: "Get details of an account by ID, checking both manual and Plaid-synced accounts.", 
+        inputSchema: { 
+            type: "object", 
+            properties: { 
+                id: { type: "integer", description: "The unique account ID." } 
+            }, 
+            required: ["id"] 
+        } 
+    },
+    {
+        name: "list_transactions",
+        description: "List transactions with optional filtering and search.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                start_date: { type: "string", format: "date", description: "Start date to filter transactions (YYYY-MM-DD)." }, 
+                end_date: { type: "string", format: "date", description: "End date to filter transactions (YYYY-MM-DD)." },
+                timeframe: { type: "string", enum: ["this_month", "last_month", "year_to_date", "this_year", "last_year"], description: "Predefined timeframe filter (e.g., this_month, last_month)." },
+                created_since: { type: "string", description: "Filter transactions created after this timestamp (ISO 8601)." },
+                updated_since: { type: "string", description: "Filter transactions updated after this timestamp (ISO 8601)." },
+                manual_account_id: { type: "integer", description: "Filter by manual account ID." }, 
+                plaid_account_id: { type: "integer", description: "Filter by Plaid-synced account ID." }, 
+                recurring_id: { type: "integer", description: "Filter by recurring transaction ID." },
+                category_id: { type: "integer", description: "Filter by category ID." }, 
+                category_ids: { 
+                    type: "array", 
+                    items: { type: "integer" }, 
+                    description: "Filter by multiple category IDs. Transactions matching any of these categories will be returned." 
+                },
+                category_group_id: { 
+                    type: "integer", 
+                    description: "Filter by parent category group ID. All transactions in the group's child categories will be returned." 
+                },
+                tag_id: { type: "integer", description: "Filter by tag ID." },
+                is_group_parent: { type: "boolean", description: "Filter to return only parent transactions of a group." },
+                status: { type: "string", enum: ["reviewed", "unreviewed", "delete_pending"], description: "Filter by transaction status." },
+                is_pending: { type: "boolean", description: "Filter for pending transactions." }, 
+                include_pending: { type: "boolean", default: false, description: "Include pending transactions in the results." },
+                include_metadata: { type: "boolean", default: false, description: "Include developer metadata in the response." },
+                include_split_parents: { type: "boolean", default: false, description: "Include parent transactions of split transactions." }, 
+                include_group_children: { type: "boolean", default: false, description: "Include child transactions of group transactions." }, 
+                include_children: { type: "boolean", default: false, description: "Include child transactions of split transactions in the response." },
+                include_files: { type: "boolean", default: false, description: "Include file attachment metadata." },
+                limit: { type: "integer", minimum: 1, maximum: 2000, default: 1000, description: "Maximum number of transactions to return (1-2000)." }, 
+                offset: { type: "integer", minimum: 0, description: "Number of transactions to skip for pagination." },
+                search: { type: "string", maxLength: 100, description: "Search term matched against payee, notes, or original name (max 100 chars)." },
+                include_category_names: { 
+                    type: "boolean", 
+                    default: false, 
+                    description: "If true, resolves and includes category_name on each transaction." 
+                },
+                include_tag_names: { 
+                    type: "boolean", 
+                    default: false, 
+                    description: "If true, resolves and includes tag_names and tags objects on each transaction." 
+                }
+            },
+            oneOf: [
+                {
+                    required: ["timeframe"],
+                    not: {
+                        anyOf: [
+                            { required: ["start_date"] },
+                            { required: ["end_date"] }
+                        ]
+                    }
+                },
+                {
+                    not: { required: ["timeframe"] }
+                }
+            ]
+        }
+    },
+    { 
+        name: "list_tags", 
+        description: "List all custom tags.", 
+        inputSchema: { type: "object", properties: {} } 
+    },
+    { 
+        name: "list_recurring_items", 
+        description: "List recurring transaction items.", 
+        inputSchema: { 
+            type: "object", 
+            properties: { 
+                start_date: { type: "string", format: "date", description: "Filter by start date (YYYY-MM-DD)." }, 
+                end_date: { type: "string", format: "date", description: "Filter by end date (YYYY-MM-DD)." }, 
+                include_suggested: { type: "boolean", description: "Include system-suggested recurring items." },
+                status: { type: "string", enum: ["suggested", "manual", "reviewed"], description: "Filter by status: manual/reviewed items, or system-suggested items." }
+            } 
+        } 
+    },
+    { 
+        name: "get_budget_settings", 
+        description: "Get general budget settings including currency.", 
+        inputSchema: { type: "object", properties: {} } 
+    },
+    {
+        name: "get_budget_summary",
+        description: "Get budget summary with category totals and usage.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                start_date: { type: "string", format: "date", description: "Start date for budget summary (YYYY-MM-DD)." }, 
+                end_date: { type: "string", format: "date", description: "End date for budget summary (YYYY-MM-DD)." },
+                timeframe: { type: "string", enum: ["this_month", "last_month", "year_to_date", "this_year", "last_year"], description: "Predefined timeframe filter (e.g., this_month, last_month)." },
+                include_exclude_from_budgets: { type: "boolean", default: false, description: "Include items marked 'exclude from budget'." },
+                include_occurrences: { type: "boolean", default: false, description: "Include actual transaction occurrences in the summary." },
+                include_past_budget_dates: { type: "boolean", default: false, description: "Include past budget dates." },
+                include_totals: { type: "boolean", default: false, description: "Include overall totals." },
+                include_rollover_pool: { type: "boolean", default: false, description: "Include rollover calculations." }
+            },
+            oneOf: [
+                {
+                    required: ["timeframe"],
+                    not: {
+                        anyOf: [
+                            { required: ["start_date"] },
+                            { required: ["end_date"] }
+                        ]
+                    }
+                },
+                {
+                    required: ["start_date", "end_date"],
+                    not: { required: ["timeframe"] }
+                }
+            ]
+        }
+    },
+    { 
+        name: "list_categories", 
+        description: "List all categories.", 
+        inputSchema: { 
+            type: "object", 
+            properties: { 
+                format: { type: "string", enum: ["nested", "flattened"], default: "nested", description: "Format of the categories list ('nested' or 'flattened')." }, 
+                is_group: { type: "boolean", description: "Filter for category groups." } 
+            } 
+        } 
+    },
+    { 
+        name: "list_accounts", 
+        description: "List all manual and Plaid-synced accounts.", 
+        inputSchema: { type: "object", properties: {} } 
+    },
+    {
+        name: "get_transaction_attachment_url",
+        description: "Get a temporary download URL for a transaction attachment.",
+        inputSchema: {
+            type: "object",
+            properties: { 
+                file_id: { type: "integer", description: "The ID of the attachment file." } 
+            },
+            required: ["file_id"]
+        }
+    }
+];
+
+// Compile schemas
+for (const tool of TOOLS) {
+    if (tool.inputSchema) {
+        if (!tool.inputSchema.properties) {
+            tool.inputSchema.properties = {};
+        }
+        tool.inputSchema.properties.output_format = {
+            type: "string",
+            enum: ["markdown", "json"],
+            default: "markdown",
+            description: "The format of the response output ('markdown' or 'json')."
+        };
+        validators[tool.name] = ajv.compile(tool.inputSchema);
+    }
+}
+
 const mcpServer = new Server(
     { name: "lunchmoney-exhaustive-readonly-mcp", version: "2.2.0" },
-    { capabilities: { tools: {} } }
+    { capabilities: { tools: {}, resources: {}, prompts: {} } }
 );
 
 mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
+    return { tools: TOOLS };
+});
+
+mcpServer.setRequestHandler(ListResourcesRequestSchema, async () => {
     return {
-        tools: [
-            { 
-                name: "clear_cache", 
-                description: "Clears the internal server account definitions memory cache manually.", 
-                inputSchema: { type: "object", properties: {} } 
-            },
-            { 
-                name: "get_current_user", 
-                description: "Get metadata profile definitions for the current user session context.", 
-                inputSchema: { type: "object", properties: {} } 
-            },
-            { 
-                name: "get_transaction", 
-                description: "Get precise structural definition payload for a single transaction mapping row by record identifier key.", 
-                inputSchema: { 
-                    type: "object", 
-                    properties: { id: { type: "integer", description: "Transaction identifier key mapping reference lookup." } }, 
-                    required: ["id"] 
-                } 
-            },
-            { 
-                name: "get_category", 
-                description: "Get category tracking bucket node definitions by resource identifier index.", 
-                inputSchema: { 
-                    type: "object", 
-                    properties: { id: { type: "integer", description: "Category target node structural entity index mapping identifier." } }, 
-                    required: ["id"] 
-                } 
-            },
-            { 
-                name: "get_tag", 
-                description: "Get specific text tracking label array definition item profiles matching standard identifier key context.", 
-                inputSchema: { 
-                    type: "object", 
-                    properties: { id: { type: "integer", description: "Tag database index profile mapper lookup constraint context." } }, 
-                    required: ["id"] 
-                } 
-            },
-            { 
-                name: "get_recurring_item", 
-                description: "Get automated upcoming programmatic prediction schedule tracking definitions with full structural match constraints criteria parameters.", 
-                inputSchema: { 
-                    type: "object", 
-                    properties: { 
-                        id: { type: "integer", description: "Programmatic billing timeline generation matrix map identifier record index." },
-                        start_date: { type: "string", format: "date", description: "Optional dynamic calculation sequence windows lower index entry boundary (YYYY-MM-DD)." },
-                        end_date: { type: "string", format: "date", description: "Optional dynamic evaluation iteration period upper capping parameter boundary limits (YYYY-MM-DD)." }
-                    }, 
-                    required: ["id"] 
-                } 
-            },
-            { 
-                name: "get_manual_account", 
-                description: "Get manual physical financial context property asset balances summary ledger values profiles by structural reference id.", 
-                inputSchema: { 
-                    type: "object", 
-                    properties: { id: { type: "integer", description: "Manual account target reference structural item definition code." } }, 
-                    required: ["id"] 
-                } 
-            },
-            { 
-                name: "get_plaid_account", 
-                description: "Get synced external institution credential link meta definitions configuration blocks by reference index key mapping.", 
-                inputSchema: { 
-                    type: "object", 
-                    properties: { id: { type: "integer", description: "Plaid core operational ledger asset entity identity identifier map pointer string code." } }, 
-                    required: ["id"] 
-                } 
-            },
-            { 
-                name: "get_account", 
-                description: "Get structural financial account item mappings seamlessly falling back across active endpoints to cleanly surface specific context data blocks.", 
-                inputSchema: { 
-                    type: "object", 
-                    properties: { id: { type: "integer", description: "Universal structural asset account mapper lookup identity verification string code." } }, 
-                    required: ["id"] 
-                } 
+        resources: [
+            {
+                uri: "lunchmoney://budget/settings",
+                name: "Budget Settings",
+                description: "General budget settings including primary currency.",
+                mimeType: "application/json"
             },
             {
-                name: "list_transactions",
-                description: "List financial history database logs. Client matching fuzzy filters run locally across structural cache items returns.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        start_date: { type: "string", format: "date", description: "History collection window search start index parameter (YYYY-MM-DD)." }, 
-                        end_date: { type: "string", format: "date", description: "History transaction window logging search upper index restriction reference parameter (YYYY-MM-DD)." },
-                        timeframe: { type: "string", enum: ["this_month", "last_month", "year_to_date", "this_year", "last_year"], description: "Dynamic date window auto-evaluator string calculation query profiles shortcut." },
-                        created_since: { type: "string", description: "Filter system logging entry profile creation time records (ISO 8601)." },
-                        updated_since: { type: "string", description: "Filter system adjustment data structural update modification times (ISO 8601)." },
-                        manual_account_id: { type: "integer", description: "Limit lookup records matching asset manual ledger constraints codes mapping references." }, 
-                        plaid_account_id: { type: "integer", description: "Limit lookup data to synced banking institution tracking codes." }, 
-                        recurring_id: { type: "integer", description: "Isolate search context strictly tracking timeline generation definitions mapping identities pointers." },
-                        category_id: { type: "integer", description: "Filter matching item parameters tracking structural budget group paths mapping indices pointers." }, 
-                        tag_id: { type: "integer", description: "Isolate items tracking special labeling criteria configuration codes." },
-                        is_group_parent: { type: "boolean", description: "Filter for identifying root transaction structural containers." },
-                        status: { type: "string", enum: ["reviewed", "unreviewed", "delete_pending"], description: "Filter rows matching review operational lifecycle contexts workflows." },
-                        is_pending: { type: "boolean", description: "Isolate items blocking structural clearance verification sequences balances." }, 
-                        include_pending: { type: "boolean", default: false, description: "Merge pending ledger elements into structural payload return frames arrays." },
-                        include_metadata: { type: "boolean", default: false, description: "Extract integrated platform technical telemetries elements labels payloads arrays mapping structures." },
-                        include_split_parents: { type: "boolean", default: false, description: "Preserve original unmodified parent group allocation structures references arrays items rows." }, 
-                        include_group_children: { type: "boolean", default: false, description: "Pull sub-records child structural logs attached directly within structural master items references grids entries." }, 
-                        include_children: { type: "boolean", default: false, description: "Extract split fractional item rows children sub-records details entries blocks mapping components arrays." },
-                        include_files: { type: "boolean", default: false, description: "Extract transaction validation imaging attachment document reference maps keys." },
-                        limit: { type: "integer", minimum: 1, maximum: 2000, default: 1000, description: "Dataset maximum query buffer window length constraints sizing elements pagination." }, 
-                        offset: { type: "integer", description: "Pagination entry collection indexing displacement offsets parameters indicators pointer loops." },
-                        search: { type: "string", maxLength: 100, description: "In-memory query text constraint tested case-insensitive across payee names, user string notes, and original row texts." }
-                    }
-                }
-            },
-            { 
-                name: "list_tags", 
-                description: "List configuration data details for all custom labeling keys defined on platform profiles.", 
-                inputSchema: { type: "object", properties: {} } 
-            },
-            { 
-                name: "list_recurring_items", 
-                description: "List predictive baseline tracking items schedules maps definitions fields configurations structures.", 
-                inputSchema: { 
-                    type: "object", 
-                    properties: { 
-                        start_date: { type: "string", format: "date", description: "Baseline historical scanning evaluation starting tracking criteria lower entry (YYYY-MM-DD)." }, 
-                        end_date: { type: "string", format: "date", description: "Baseline dynamic tracking window evaluation timeline cutoff capping index point (YYYY-MM-DD)." }, 
-                        include_suggested: { type: "boolean", description: "Merge systemic intelligence anomaly modeling pattern tracking observations arrays items records representations." } 
-                    } 
-                } 
-            },
-            { 
-                name: "get_budget_settings", 
-                description: "Get general baseline scheduling profiles anchors and currency structural definitions context constraints records properties.", 
-                inputSchema: { type: "object", properties: {} } 
-            },
-            {
-                name: "get_budget_summary",
-                description: "Get high-level structural category aggregation totals and budget timeline usage data. Requires timeframe or split dates bounds blocks parameters parsing constraints.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        start_date: { type: "string", format: "date", description: "Timeline monitoring tracking period analytical data calculation framework initial date parameter (YYYY-MM-DD)." }, 
-                        end_date: { type: "string", format: "date", description: "Timeline monitoring query system accounting aggregation window upper ceiling reference boundary (YYYY-MM-DD)." },
-                        timeframe: { type: "string", enum: ["this_month", "last_month", "year_to_date", "this_year", "last_year"], description: "Query quick window calculation configuration macro parser values sets labels mappings shortcuts." },
-                        include_exclude_from_budgets: { type: "boolean", default: false, description: "Inject context entries explicitly bypassed by frontend visualization dashboards layers blocks definitions paths." },
-                        include_occurrences: { type: "boolean", default: false, description: "Unpack matching structural transaction timeline occurrences blocks inside target categories components entries elements." },
-                        include_past_budget_dates: { type: "boolean", default: false, description: "Pull peripheral historical timeline calculation metadata reference blocks logs metrics fields." },
-                        include_totals: { type: "boolean", default: false, description: "Inject global summing matrix summaries vectors components fields into the structural data stream parameters arrays data elements calculations blocks." },
-                        include_rollover_pool: { type: "boolean", default: false, description: "Calculate rolling multi-period surplus residual credit allocations streams values components blocks fields models numbers." }
-                    }
-                }
-            },
-            { 
-                name: "list_categories", 
-                description: "List all active operational budget mapping tree target groupings nodes profiles variables details elements blocks configurations structural layouts.", 
-                inputSchema: { 
-                    type: "object", 
-                    properties: { 
-                        format: { type: "string", enum: ["nested", "flattened"], default: "nested", description: "Data presentation organizational layout matrix geometry selector." }, 
-                        is_group: { type: "boolean", description: "Isolate entries explicitly defining structural master parent classification categories groups models paths headers." } 
-                    } 
-                } 
-            },
-            { 
-                name: "list_accounts", 
-                description: "List comprehensive manual and active Plaid syncing accounts profile definition mappings metrics contexts balances components variables layouts ledger snapshots summaries tracking variables elements structures.", 
-                inputSchema: { type: "object", properties: {} } 
-            },
-            {
-                name: "get_transaction_attachment_url",
-                description: "Generate a cryptographically secured brief transient cloud downloading link for validation receipt assets tokens references fields.",
-                inputSchema: {
-                    type: "object",
-                    properties: { file_id: { type: "integer", description: "Structural attachment tracking file code lookup key reference parameter mapped indicator indexing pointer element entry row." } },
-                    required: ["file_id"]
-                }
+                uri: "lunchmoney://accounts",
+                name: "Accounts",
+                description: "List of all manual and Plaid-synced accounts.",
+                mimeType: "application/json"
             }
         ]
     };
 });
 
+mcpServer.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const { uri } = request.params;
+    if (uri === "lunchmoney://budget/settings") {
+        const { status, body } = await nativeFetch("/budgets/settings", "GET", LM_API_TOKEN);
+        if (status !== 200) {
+            throw new Error(`Failed to read budget settings: ${extractError(body, status)}`);
+        }
+        return {
+            contents: [
+                {
+                    uri,
+                    mimeType: "application/json",
+                    text: JSON.stringify(cleanObject(body))
+                }
+            ]
+        };
+    }
+    if (uri === "lunchmoney://accounts") {
+        const data = await getAccountsData(LM_API_TOKEN);
+        return {
+            contents: [
+                {
+                    uri,
+                    mimeType: "application/json",
+                    text: JSON.stringify(cleanObject({ manual: data.manual, synced: data.synced }))
+                }
+            ]
+        };
+    }
+    throw new Error(`Unknown resource URI: ${uri}`);
+});
+
+mcpServer.setRequestHandler(ListPromptsRequestSchema, async () => {
+    return {
+        prompts: [
+            {
+                name: "analyze_spending",
+                description: "Analyze spending trends and budget summaries for a given timeframe.",
+                arguments: [
+                    {
+                        name: "timeframe",
+                        description: "Timeframe to analyze (e.g. this_month, last_month, year_to_date). Defaults to this_month.",
+                        required: false
+                    }
+                ]
+            },
+            {
+                name: "find_untagged",
+                description: "Identify transactions that do not have any tags applied.",
+                arguments: []
+            }
+        ]
+    };
+});
+
+mcpServer.setRequestHandler(GetPromptRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params;
+    if (name === "analyze_spending") {
+        const timeframe = args?.timeframe || "this_month";
+        return {
+            description: "Analyze spending trends",
+            messages: [
+                {
+                    role: "user",
+                    content: {
+                        type: "text",
+                        text: `Please analyze my spending trends and budget summary for the timeframe "${timeframe}". Identify areas of high expenditure and compare my actual spending against the budget.`
+                    }
+                }
+            ]
+        };
+    }
+    if (name === "find_untagged") {
+        return {
+            description: "Identify untagged transactions",
+            messages: [
+                {
+                    role: "user",
+                    content: {
+                        type: "text",
+                        text: "Please search for recent transactions that do not have any tags associated with them and list them. Suggest relevant tags for each of them based on the payee name or category."
+                    }
+                }
+            ]
+        };
+    }
+    throw new Error(`Unknown prompt name: ${name}`);
+});
+
 mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     const handler = toolHandlers[name];
-    if (!handler) return mcpResponse.error(`Unknown requested capability execution trace: ${name}`);
+    if (!handler) {
+        throw new McpError(ErrorCode.MethodNotFound, `Unknown requested capability execution trace: ${name}`);
+    }
     
+    const validate = validators[name];
+    const validArgs = args || {};
+    if (validate) {
+        const valid = validate(validArgs);
+        if (!valid) {
+            // Check for timeframe / date mutex validation issues to provide a clear error message
+            if (name === "list_transactions" || name === "get_budget_summary") {
+                const hasTimeframe = validArgs.timeframe !== undefined;
+                const hasStartDate = validArgs.start_date !== undefined;
+                const hasEndDate = validArgs.end_date !== undefined;
+                
+                if (hasTimeframe && (hasStartDate || hasEndDate)) {
+                    return mcpResponse.error("Validation failed: You cannot specify both 'timeframe' and 'start_date'/'end_date' simultaneously.");
+                }
+                if (name === "get_budget_summary" && !hasTimeframe && (!hasStartDate || !hasEndDate)) {
+                    return mcpResponse.error("Validation failed: You must specify either 'timeframe' or both 'start_date' and 'end_date'.");
+                }
+            }
+
+            const errors = validate.errors.map(err => {
+                if (err.keyword === 'required') {
+                    return `Missing required parameter '${err.params.missingProperty}'`;
+                }
+                const field = err.instancePath ? err.instancePath.replace(/^\//, '') : '';
+                const prefix = field ? `Parameter '${field}' ` : '';
+                return `${prefix}${err.message}`;
+            }).join('; ');
+            return mcpResponse.error(`Validation failed: ${errors}`);
+        }
+    }
+
     try {
-        return await handler(args);
+        const result = await handler(validArgs);
+        
+        // Format the content based on output_format parameter (defaulting to markdown)
+        if (result && result.content) {
+            const format = validArgs.output_format || "markdown";
+            const hasMarkdown = result._mcp_markdown !== undefined;
+            
+            if (format === "json" || !hasMarkdown) {
+                // Return only JSON text block
+                result.content = [{ type: "text", text: JSON.stringify(result._mcp_raw_data || {}) }];
+            } else {
+                // Return only markdown text block
+                result.content = [{ type: "text", text: result._mcp_markdown }];
+            }
+            
+            // Clean up internal properties
+            delete result._mcp_raw_data;
+            delete result._mcp_markdown;
+        }
+        
+        return result;
     } catch (err) {
         return mcpResponse.error(sanitizeDeep(err));
     }
 });
 
 const transport = new StdioServerTransport();
+
+let initialized = false;
+const originalConnect = mcpServer.connect.bind(mcpServer);
+mcpServer.connect = async (trans) => {
+    await originalConnect(trans);
+    const sdkOnMessage = trans.onmessage;
+    trans.onmessage = (message, extra) => {
+        if (message && message.method) {
+            if (message.method === 'initialize') {
+                initialized = true;
+            } else if (!initialized && message.id !== undefined) {
+                trans.send({
+                    jsonrpc: '2.0',
+                    id: message.id,
+                    error: {
+                        code: -32002,
+                        message: 'Server not initialized'
+                    }
+                }).catch(err => console.error("[MCP Error] Failed to send initialization error response:", err));
+                return;
+            }
+        }
+        sdkOnMessage(message, extra);
+    };
+};
+
 await mcpServer.connect(transport);
 console.error("[MCP] Fully Exhaustive Read-Only Server connected via Stdio channels.");

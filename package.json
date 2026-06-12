@@ -5,7 +5,9 @@
     "type": "module",
     "main": "lunch-money-mcp-ro.js",
     "dependencies": {
-        "@modelcontextprotocol/sdk": "^1.0.1"
+        "@modelcontextprotocol/sdk": "^1.0.1",
+        "ajv": "^8.20.0",
+        "ajv-formats": "^3.0.1"
     },
     "engines": {
         "node": ">=20.6.0"
