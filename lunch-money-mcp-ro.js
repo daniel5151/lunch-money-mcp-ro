@@ -239,6 +239,10 @@ function resolveTimeframe(timeframe) {
             startDate = formatDateUTC(new Date(Date.UTC(y - 1, 0, 1)));
             endDate = formatDateUTC(new Date(Date.UTC(y - 1, 11, 31)));
             break;
+        default:
+            // Guard against schema/handler drift: an unrecognized timeframe
+            // would otherwise yield undefined dates and a malformed query.
+            throw new Error(`Unsupported timeframe: ${timeframe}`);
     }
     return { startDate, endDate };
 }
@@ -656,17 +660,49 @@ function generateMarkdown(data) {
         return md;
     }
 
+    // 10. Bare status/acknowledgement message (e.g. clear_cache). Last resort
+    // before the empty-string fallback so a one-key { message } payload renders
+    // as a readable line instead of raw JSON.
+    if (typeof data.message === "string" && Object.keys(data).length === 1) {
+        return data.message;
+    }
+
     return "";
 }
 
+// Top-level wrapper keys that name a collection the client iterates. cleanObject
+// strips empty arrays (intended for nested noise like an empty tag_ids), but for
+// these the empty array IS the contract: a zero-result list must still expose
+// `transactions: []` rather than vanishing, or `result.transactions.map(...)`
+// throws on the client. Re-asserted as [] after cleaning when the source had the
+// key as an array. Nested stripping is untouched, so BUG#3 stays green.
+const COLLECTION_KEYS = ["transactions", "categories", "tags", "recurring_items", "manual", "synced"];
+
 const mcpResponse = {
-    success: (data) => {
+    success: (data, markdownSource) => {
+        // cleanObject strips null/empty values for the JSON output. Markdown
+        // shape-detection runs on the raw payload, so it is deferred to the
+        // request dispatcher and only rendered when markdown output is wanted
+        // (see CallToolRequestSchema handler). _mcp_source carries the payload
+        // for that lazy render and is stripped before responding.
+        //
+        // The JSON path (_mcp_raw_data) stays faithful to the underlying API
+        // body. When a presentation-only enrichment is wanted (e.g. resolving a
+        // category_id to a name for the markdown view), pass it as the optional
+        // `markdownSource` second arg: it feeds the markdown renderer ONLY and
+        // never reaches the JSON output, which keeps json passthrough honest.
         const cleaned = cleanObject(data) || {};
-        const markdown = generateMarkdown(cleaned);
+        if (data && typeof data === "object" && !Array.isArray(data)) {
+            for (const key of COLLECTION_KEYS) {
+                if (Array.isArray(data[key]) && !(key in cleaned)) {
+                    cleaned[key] = [];
+                }
+            }
+        }
         return {
             content: [{ type: "text", text: JSON.stringify(cleaned) }],
             _mcp_raw_data: cleaned,
-            ...(markdown && { _mcp_markdown: markdown })
+            _mcp_source: markdownSource !== undefined ? markdownSource : data
         };
     },
     error: (msg) => ({ content: [{ type: "text", text: `Error processing operation: ${msg}` }], isError: true })
@@ -848,15 +884,9 @@ const toolHandlers = {
         
         let result = body.recurring_items || [];
         if (args && args.status !== undefined) {
+            // The API's recurringObject.status enum is exactly suggested|reviewed.
             const statusFilter = args.status;
-            result = result.filter(item => {
-                if (statusFilter === "suggested") {
-                    return item.status === "suggested";
-                } else if (statusFilter === "manual" || statusFilter === "reviewed") {
-                    return item.status === "reviewed";
-                }
-                return true;
-            });
+            result = result.filter(item => item.status === statusFilter);
         }
         
         return mcpResponse.success({ recurring_items: result });
@@ -1343,7 +1373,7 @@ const TOOLS = [
                 start_date: { type: "string", format: "date", description: "Filter by start date (YYYY-MM-DD)." }, 
                 end_date: { type: "string", format: "date", description: "Filter by end date (YYYY-MM-DD)." }, 
                 include_suggested: { type: "boolean", description: "Include system-suggested recurring items." },
-                status: { type: "string", enum: ["suggested", "manual", "reviewed"], description: "Filter by status: manual/reviewed items, or system-suggested items." }
+                status: { type: "string", enum: ["suggested", "reviewed"], description: "Filter by status: reviewed (confirmed) or suggested (system-detected) items." }
             } 
         } 
     },
@@ -1587,22 +1617,31 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
         const result = await handler(validArgs);
         
-        // Format the content based on output_format parameter (defaulting to markdown)
-        if (result && result.content) {
+        // Format the content based on output_format parameter (defaulting to markdown).
+        // Skip error responses: they carry their message in content with no
+        // _mcp_raw_data, so reformatting would overwrite it with "{}".
+        if (result && result.content && !result.isError) {
             const format = validArgs.output_format || "markdown";
-            const hasMarkdown = result._mcp_markdown !== undefined;
-            
-            if (format === "json" || !hasMarkdown) {
-                // Return only JSON text block
+
+            if (format === "json") {
                 result.content = [{ type: "text", text: JSON.stringify(result._mcp_raw_data || {}) }];
             } else {
-                // Return only markdown text block
-                result.content = [{ type: "text", text: result._mcp_markdown }];
+                // Render markdown lazily from the raw payload. If no shape
+                // matches, generateMarkdown returns "" and we fall back to JSON.
+                const markdown = generateMarkdown(result._mcp_source);
+                if (markdown) {
+                    result.content = [{ type: "text", text: decodeEntities(markdown) }];
+                } else {
+                    // Surface the gap: a silent fallback otherwise hides a
+                    // missing/incorrect markdown renderer branch.
+                    console.error(`[MCP] No markdown renderer matched tool "${name}"; falling back to JSON.`);
+                    result.content = [{ type: "text", text: JSON.stringify(result._mcp_raw_data || {}) }];
+                }
             }
-            
+
             // Clean up internal properties
             delete result._mcp_raw_data;
-            delete result._mcp_markdown;
+            delete result._mcp_source;
         }
         
         return result;
