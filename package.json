@@ -11,5 +11,10 @@
     },
     "engines": {
         "node": ">=20.6.0"
+    },
+    "scripts": {
+        "pretest": "bash ~/workspace/lm-mcp-explore/start-relay.sh",
+        "test": "node test/run-live.js",
+        "test:live": "node test/run-live.js"
     }
 }

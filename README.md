@@ -74,6 +74,33 @@ Alternatively, set the environment variable when configuring your MCP server:
 }
 ```
 
+### Optional: targeting a different API base
+
+By default the server talks to `https://api.lunchmoney.dev/v2`. Set
+`LM_API_BASE_URL` to point it at a different host — used by the test suite to
+run against a local mock, and useful for a staging endpoint:
+
+```sh
+LM_API_BASE_URL=http://127.0.0.1:8787/v2 node lunch-money-mcp-ro.js
+```
+
+---
+
+## Testing
+
+End-to-end tests run the real server against the official Lunch Money v2 static
+mock API (`mock.lunchmoney.dev/v2`) — no real API key and no account needed.
+`npm test` starts a local relay automatically, then drives the server over
+stdio JSON-RPC and asserts on the rendered output:
+
+```sh
+npm test
+```
+
+See [`test/README.md`](test/README.md) for what is covered and how to extend
+it, and [`test/MOCK-SERVER.md`](test/MOCK-SERVER.md) for the mock and relay
+details.
+
 ---
 
 ## MCP Resources

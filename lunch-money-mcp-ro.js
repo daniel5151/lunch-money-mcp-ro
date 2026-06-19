@@ -1,4 +1,6 @@
 import https from 'https';
+import http from 'http';
+import { URL } from 'url';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -40,8 +42,25 @@ if (typeof process.loadEnvFile === 'function') {
     console.error("[Warning] Node.js version is older than 20.6.0. process.loadEnvFile is not supported.");
 }
 
-const TARGET_HOST = 'api.lunchmoney.dev';
-const TARGET_BASE_PATH = '/v2';
+// Base URL is configurable so the server can be pointed at a mock/staging API
+// for testing. Defaults to the production Lunch Money v2 endpoint.
+const DEFAULT_API_BASE_URL = 'https://api.lunchmoney.dev/v2';
+const API_BASE_URL = process.env.LM_API_BASE_URL || DEFAULT_API_BASE_URL;
+
+let API_BASE;
+try {
+    API_BASE = new URL(API_BASE_URL);
+} catch (e) {
+    console.error(`\x1b[31m[Critical Error] LM_API_BASE_URL is not a valid URL: ${API_BASE_URL}\x1b[0m`);
+    process.exit(1);
+}
+
+const TARGET_PROTOCOL = API_BASE.protocol;            // 'http:' or 'https:'
+const TARGET_HOST = API_BASE.hostname;
+const TARGET_PORT = API_BASE.port ? Number(API_BASE.port) : (TARGET_PROTOCOL === 'http:' ? 80 : 443);
+// Strip any trailing slash so endpoint paths like '/me' concatenate cleanly.
+const TARGET_BASE_PATH = API_BASE.pathname.replace(/\/$/, '');
+const TARGET_TRANSPORT = TARGET_PROTOCOL === 'http:' ? http : https;
 const LM_API_TOKEN = process.env.LUNCHMONEY_API_KEY;
 
 if (!LM_API_TOKEN) {
@@ -259,8 +278,9 @@ function resolveTimeframe(timeframe) {
 async function nativeFetch(endpointPath, method = "GET", token) {
     return new Promise((resolve, reject) => {
         const options = {
+            protocol: TARGET_PROTOCOL,
             hostname: TARGET_HOST,
-            port: 443,
+            port: TARGET_PORT,
             path: `${TARGET_BASE_PATH}${endpointPath}`,
             method: method,
             headers: {
@@ -270,7 +290,7 @@ async function nativeFetch(endpointPath, method = "GET", token) {
             timeout: 15000
         };
 
-        const req = https.request(options, (res) => {
+        const req = TARGET_TRANSPORT.request(options, (res) => {
             let data = "";
             res.on("data", (chunk) => data += chunk);
             res.on("end", () => {
