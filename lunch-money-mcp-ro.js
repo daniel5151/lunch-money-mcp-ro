@@ -359,16 +359,153 @@ async function getTagsData(token) {
 
 function generateMarkdown(data) {
     if (!data) return "";
-    
+
+    // --- Recurring Items List ---
+    // v2 schema: each item nests the matching rule under `transaction_criteria`
+    // (amount/currency/payee/granularity/quantity) and user-facing overrides
+    // under `overrides` (payee/category_id/notes). There is NO top-level
+    // amount/currency/payee/billing_date. Upcoming dates live in
+    // `matches.expected_occurrence_dates`. Cadence = quantity + granularity.
+    if (data.recurring_items && Array.isArray(data.recurring_items)) {
+        if (data.recurring_items.length === 0) return "No recurring items found.";
+        let md = "### Recurring Items\n\n";
+        md += "| ID | Payee | Amount | Currency | Cadence | Next | Status |\n";
+        md += "| --- | --- | --- | --- | --- | --- | --- |\n";
+        for (const r of data.recurring_items) {
+            const tc = r.transaction_criteria || {};
+            const ov = r.overrides || {};
+            const payee = ov.payee || tc.payee || r.description || "";
+            const amount = tc.amount != null ? formatMoney(tc.amount) : "";
+            const currency = tc.currency || "";
+            const cadence = (tc.quantity != null && tc.granularity)
+                ? `every ${tc.quantity} ${tc.granularity}${tc.quantity > 1 ? "s" : ""}`
+                : (tc.granularity || "");
+            const next = (r.matches && Array.isArray(r.matches.expected_occurrence_dates)
+                && r.matches.expected_occurrence_dates.length)
+                ? r.matches.expected_occurrence_dates[0] : "";
+            md += `| ${r.id} | ${payee} | ${amount} | ${currency} | ${cadence} | ${next} | ${r.status || ""} |\n`;
+        }
+        return md;
+    }
+
+    // --- Recurring Item (Single) ---
+    // Must precede the transaction-detail branch below: recurring items also
+    // carry id and would otherwise be rendered as a transaction. The
+    // distinguishing field is `transaction_criteria` (txns/accounts lack it).
+    if (data.transaction_criteria !== undefined && data.id !== undefined) {
+        const tc = data.transaction_criteria || {};
+        const ov = data.overrides || {};
+        let md = `### Recurring Item #${data.id}\n\n`;
+        if (data.description) md += `- **Description**: ${data.description}\n`;
+        md += `- **Payee**: ${ov.payee || tc.payee || ""}\n`;
+        if (tc.amount != null) md += `- **Amount**: ${formatMoney(tc.amount)}${tc.currency ? " " + tc.currency : ""}\n`;
+        if (tc.quantity != null && tc.granularity) {
+            md += `- **Cadence**: every ${tc.quantity} ${tc.granularity}${tc.quantity > 1 ? "s" : ""}\n`;
+        } else if (tc.granularity) {
+            md += `- **Cadence**: ${tc.granularity}\n`;
+        }
+        if (tc.anchor_date) md += `- **Anchor Date**: ${tc.anchor_date}\n`;
+        if (data.status) md += `- **Status**: ${data.status}\n`;
+        const catId = ov.category_id != null ? ov.category_id : tc.category_id;
+        if (data.category_name) md += `- **Category**: ${data.category_name} (${catId})\n`;
+        else if (catId != null) md += `- **Category ID**: ${catId}\n`;
+        const notes = ov.notes || data.notes;
+        if (notes) md += `- **Notes**: ${notes}\n`;
+        if (data.matches && Array.isArray(data.matches.expected_occurrence_dates)
+            && data.matches.expected_occurrence_dates.length) {
+            md += `- **Expected Occurrences**: ${data.matches.expected_occurrence_dates.join(", ")}\n`;
+        }
+        if (data.matches && Array.isArray(data.matches.missing_transaction_dates)
+            && data.matches.missing_transaction_dates.length) {
+            md += `- **Missing**: ${data.matches.missing_transaction_dates.join(", ")}\n`;
+        }
+        return md;
+    }
+
+    // --- Single Account (manual or plaid) ---
+    // Keyed on balance (accounts have it; transactions use amount, categories/
+    // tags/budget-settings have none). date===undefined guards against any txn.
+    if (data.id !== undefined && data.balance !== undefined && data.date === undefined) {
+        const ctx = data._mcp_context_type;
+        const kind = ctx ? `${ctx.charAt(0).toUpperCase() + ctx.slice(1)} Account` : "Account";
+        let md = `### ${kind}: ${data.display_name || data.name} (#${data.id})\n\n`;
+        if (data.name && data.display_name && data.name !== data.display_name) md += `- **Name**: ${data.name}\n`;
+        md += `- **Type**: ${data.type || ""}${data.subtype ? ` / ${data.subtype}` : ""}\n`;
+        md += `- **Balance**: ${formatMoney(data.balance)} ${data.currency}\n`;
+        if (data.institution_name) md += `- **Institution**: ${data.institution_name}\n`;
+        if (data.status) md += `- **Status**: ${data.status}\n`;
+        if (data.last_import) md += `- **Last Imported**: ${data.last_import}\n`;
+        return md;
+    }
+
+    // --- Budget Settings ---
+    if (data.start_day_of_month !== undefined) {
+        let md = "### Budget Settings\n\n";
+        md += `- **Start Day of Month**: ${data.start_day_of_month}\n`;
+        md += `- **Show Rollover**: ${data.show_rollover ? "Yes" : "No"}\n`;
+        if (data.currency) md += `- **Currency**: ${data.currency}\n`;
+        return md;
+    }
+
+    // --- Budget Settings ---
+    // GET /budgets/settings returns the budgeting-period and display config.
+    // Distinctive keys (budget_period_granularity + budget_income_option) gate
+    // this branch so it can't collide with any other payload.
+    if (data.budget_period_granularity !== undefined && data.budget_income_option !== undefined) {
+        const qty = data.budget_period_quantity;
+        const period = qty !== undefined && qty !== null
+            ? `every ${qty} ${data.budget_period_granularity}${qty === 1 ? "" : "s"}`
+            : data.budget_period_granularity;
+        let md = "### Budget Settings\n\n";
+        md += `- **Period**: ${period}\n`;
+        if (data.budget_period_anchor_date) md += `- **Anchor Date**: ${data.budget_period_anchor_date}\n`;
+        md += `- **Income Basis**: ${data.budget_income_option}\n`;
+        if (data.budget_rollover_left_to_budget !== undefined) md += `- **Roll Over Left to Budget**: ${data.budget_rollover_left_to_budget ? "Yes" : "No"}\n`;
+        if (data.budget_hide_no_activity !== undefined) md += `- **Hide Categories With No Activity**: ${data.budget_hide_no_activity ? "Yes" : "No"}\n`;
+        if (data.budget_use_last_day_of_month !== undefined) md += `- **Use Last Day of Month**: ${data.budget_use_last_day_of_month ? "Yes" : "No"}\n`;
+        return md;
+    }
+
+    // --- Transaction Attachment URL ---
+    // The real GET /transactions/attachments/{file_id} returns only
+    // { url, expires_at } (see OpenAPI). Gate on `url` alone; file_name/file_id
+    // are not part of the response but are displayed if a caller ever supplies
+    // them. expires_at tells the user when the signed url stops working, so it
+    // is surfaced explicitly.
+    if (data.url !== undefined && data.transactions === undefined) {
+        let md = "### Transaction Attachment\n\n";
+        if (data.file_name) md += `- **File**: ${data.file_name}\n`;
+        if (data.file_id) md += `- **File ID**: ${data.file_id}\n`;
+        md += `- **URL**: ${data.url}\n`;
+        if (data.expires_at) md += `- **Expires**: ${data.expires_at}\n`;
+        return md;
+    }
+
     // 1. Transactions List
     if (data.transactions && Array.isArray(data.transactions)) {
         if (data.transactions.length === 0) return "No transactions found.";
+        // Only surface Tags/Notes columns when the enriched/underlying data
+        // actually carries them, so the default output stays compact.
+        const showTags = data.transactions.some(t => (Array.isArray(t.tag_names) && t.tag_names.length > 0) || (Array.isArray(t.tags) && t.tags.length > 0));
+        const showNotes = data.transactions.some(t => t.notes);
         let md = "### Transactions\n\n";
-        md += "| ID | Date | Payee | Amount | Currency | Category | Status |\n";
-        md += "| --- | --- | --- | --- | --- | --- | --- |\n";
+        md += `| ID | Date | Payee | Amount | Currency | Category | Status${showTags ? " | Tags" : ""}${showNotes ? " | Notes" : ""} |\n`;
+        md += `| --- | --- | --- | --- | --- | --- | ---${showTags ? " | ---" : ""}${showNotes ? " | ---" : ""} |\n`;
         for (const t of data.transactions) {
-            const cat = t.category_name || t.category_id || "Uncategorized";
-            md += `| ${t.id} | ${t.date} | ${t.payee || ""} | ${t.amount} | ${t.currency} | ${cat} | ${t.status} |\n`;
+            // Prefer a resolved name; otherwise mark a bare id with "#" so the
+            // cell reads as an id reference (e.g. "#83") rather than a mystery
+            // number under the "Category" header. Matches the single-detail view.
+            const cat = t.category_name
+                || (t.category_id != null ? `#${t.category_id}` : "Uncategorized");
+            let row = `| ${t.id} | ${t.date} | ${t.payee || ""} | ${formatMoney(t.amount)} | ${t.currency} | ${cat} | ${t.status}`;
+            if (showTags) {
+                const names = (Array.isArray(t.tag_names) && t.tag_names.length > 0)
+                    ? t.tag_names
+                    : (Array.isArray(t.tags) ? t.tags.map(tag => tag && tag.name).filter(Boolean) : []);
+                row += ` | ${names.join(", ")}`;
+            }
+            if (showNotes) row += ` | ${t.notes || ""}`;
+            md += row + " |\n";
         }
         if (data.has_more) {
             md += "\n*Note: There are more transactions available (has_more: true).*";
@@ -382,7 +519,7 @@ function generateMarkdown(data) {
         md += `- **Date**: ${data.date}\n`;
         md += `- **Payee**: ${data.payee || ""}\n`;
         if (data.original_name) md += `- **Original Name**: ${data.original_name}\n`;
-        md += `- **Amount**: ${data.amount} ${data.currency}\n`;
+        md += `- **Amount**: ${formatMoney(data.amount)} ${data.currency}\n`;
         md += `- **Status**: ${data.status}\n`;
         if (data.category_name) md += `- **Category**: ${data.category_name} (${data.category_id})\n`;
         else if (data.category_id) md += `- **Category ID**: ${data.category_id}\n`;
@@ -401,7 +538,7 @@ function generateMarkdown(data) {
             md += "| ID | Name | Type | Balance | Currency |\n";
             md += "| --- | --- | --- | --- | --- |\n";
             for (const a of data.manual) {
-                md += `| ${a.id} | ${a.name} | ${a.type} | ${a.balance} | ${a.currency} |\n`;
+                md += `| ${a.id} | ${a.name} | ${a.type} | ${formatMoney(a.balance)} | ${a.currency} |\n`;
             }
             md += "\n";
         }
@@ -410,21 +547,30 @@ function generateMarkdown(data) {
             md += "| ID | Name | Institution | Balance | Currency | Last Imported |\n";
             md += "| --- | --- | --- | --- | --- | --- |\n";
             for (const a of data.synced) {
-                md += `| ${a.id} | ${a.name} | ${a.institution_name || ""} | ${a.balance} | ${a.currency} | ${a.last_import || ""} |\n`;
+                md += `| ${a.id} | ${a.name} | ${a.institution_name || ""} | ${formatMoney(a.balance)} | ${a.currency} | ${a.last_import || ""} |\n`;
             }
         }
         return md;
     }
 
     // 4. Categories List
-    if (data.categories && Array.isArray(data.categories) && !data.aligned) {
+    if (data.categories && Array.isArray(data.categories) && data.aligned === undefined) {
         if (data.categories.length === 0) return "No categories found.";
         let md = "### Categories\n\n";
         md += "| ID | Name | Group? | Group ID | Description |\n";
         md += "| --- | --- | --- | --- | --- |\n";
-        for (const c of data.categories) {
-            md += `| ${c.id} | ${c.name} | ${c.is_group ? "Yes" : "No"} | ${c.group_id || ""} | ${c.description || ""} |\n`;
-        }
+        // Render the full nested structure: a group's subcategories live in its
+        // children[] and are shown as indented rows beneath it. The flattened
+        // format carries no children, so this degrades to a flat list. Recursion
+        // handles arbitrary depth even though LM nests only one level today.
+        const renderCategoryRow = (c, depth) => {
+            const indent = depth > 0 ? "\u00a0\u00a0\u00a0\u00a0\u21b3 " : "";
+            md += `| ${c.id} | ${indent}${c.name} | ${c.is_group ? "Yes" : "No"} | ${c.group_id || ""} | ${c.description || ""} |\n`;
+            if (Array.isArray(c.children)) {
+                for (const child of c.children) renderCategoryRow(child, depth + 1);
+            }
+        };
+        for (const c of data.categories) renderCategoryRow(c, 0);
         return md;
     }
 
@@ -446,11 +592,38 @@ function generateMarkdown(data) {
         md += "| Category | Budgeted | Actual Activity | Available |\n";
         md += "| --- | --- | --- | --- |\n";
         for (const item of data.categories) {
-            const catIdentifier = item.category_name ? `${item.category_name} (${item.category_id})` : item.category_id;
-            const budgeted = item.totals.budgeted !== null ? item.totals.budgeted : "Not set";
-            const actual = (item.totals.other_activity || 0) + (item.totals.recurring_activity || 0);
-            const available = item.totals.available;
+            // The API's summary categories carry only category_id; category_name
+            // is enriched by the get_budget_summary handler from a parallel
+            // /categories fetch. That fetch is best-effort, so fall back to the
+            // bare id if enrichment was unavailable.
+            const catIdentifier = item.category_name ? `${item.category_name} (${item.category_id})` : `#${item.category_id}`;
+            const budgeted = item.totals.budgeted !== null && item.totals.budgeted !== undefined ? formatMoney(item.totals.budgeted) : "Not set";
+            // Sum activity in integer cents to avoid float drift (e.g. 43.360000000000014).
+            const actual = formatMoney(addMoney(item.totals.other_activity, item.totals.recurring_activity));
+            const available = item.totals.available !== null && item.totals.available !== undefined ? formatMoney(item.totals.available) : "";
             md += `| ${catIdentifier} | ${budgeted} | ${actual} | ${available} |\n`;
+        }
+        // Overall totals (present when include_totals is set, which is the
+        // default). The API returns inflow/outflow groups; surface the headline
+        // numbers as a footer so the markdown reflects the same rollup the JSON
+        // carries. Each group's "activity" is other_activity + recurring_activity
+        // (summed in integer cents to avoid float drift).
+        if (data.totals && typeof data.totals === "object") {
+            const groupTotal = g => (g && typeof g === "object")
+                ? formatMoney(addMoney(g.other_activity, g.recurring_activity))
+                : null;
+            const inflow = groupTotal(data.totals.inflow);
+            const outflow = groupTotal(data.totals.outflow);
+            if (inflow !== null || outflow !== null) {
+                md += "\n**Totals**\n\n";
+                if (inflow !== null) md += `- **Inflow activity**: ${inflow}\n`;
+                if (outflow !== null) md += `- **Outflow activity**: ${outflow}\n`;
+                const unc = data.totals.outflow && data.totals.outflow.uncategorized;
+                const uncCount = data.totals.outflow && data.totals.outflow.uncategorized_count;
+                if (unc !== null && unc !== undefined && Number(unc) !== 0) {
+                    md += `- **Uncategorized outflow**: ${formatMoney(unc)}${uncCount ? ` (${uncCount} txn${uncCount === 1 ? "" : "s"})` : ""}\n`;
+                }
+            }
         }
         return md;
     }
@@ -531,6 +704,16 @@ const toolHandlers = {
         const safeId = encodeURIComponent(String(id));
         const { status, body } = await nativeFetch(`/transactions/${safeId}`, "GET", LM_API_TOKEN);
         if (status !== 200) return mcpResponse.error(`Failed lookup (Status ${status}): ${extractError(body, status)}`);
+        // Resolve category_id -> category_name so a single-transaction drill-down
+        // is not less informative in MARKDOWN than the list row it came from
+        // (list_transactions resolves names by default). One cached lookup. The
+        // resolved name is passed as a markdown-only source so the JSON output
+        // stays a faithful passthrough of the raw API body.
+        if (body && body.category_id != null) {
+            const categories = await getCategoriesData(LM_API_TOKEN).catch(() => []);
+            const name = buildCategoryNameMap(categories).get(body.category_id);
+            if (name) return mcpResponse.success(body, { ...body, category_name: name });
+        }
         return mcpResponse.success(body);
     },
 
@@ -554,8 +737,17 @@ const toolHandlers = {
         }
         const categories = await getCategoriesData(LM_API_TOKEN).catch(() => []);
         const idSet = new Set(ids.map(Number));
-        const filtered = categories.filter(c => idSet.has(c.id));
-        return mcpResponse.success({ categories: filtered });
+        // Subcategories live in a parent group's children[], so filter the
+        // flattened list — a top-level-only filter silently drops child ids.
+        const filtered = flattenCategories(categories).filter(c => idSet.has(c.id));
+        // Strip children[] from each result: the categories renderer recurses
+        // into children[] and would re-expand a requested group's subcategories
+        // as extra rows that were NOT in `ids`, breaking the by-ids contract
+        // (e.g. asking for [83,84,315174] returned 6 rows). A requested child
+        // already appears as its own row via the flatten above. Shallow-clone
+        // so we never mutate the shared categories cache.
+        const stripped = filtered.map(({ children, ...rest }) => rest);
+        return mcpResponse.success({ categories: stripped });
     },
 
     "get_tag": async (args) => {
@@ -680,6 +872,21 @@ const toolHandlers = {
 
         const { status, body } = await nativeFetch(`/recurring_items/${safeId}${buildQueryString(cleanArgs)}`, "GET", LM_API_TOKEN);
         if (status !== 200) return mcpResponse.error(`Failed retrieving recurring item with ID ${id}: ${extractError(body, status)}`);
+        // Resolve the effective category id (override wins over criteria) to a
+        // name for the MARKDOWN view, mirroring the transaction detail view. The
+        // resolved name is passed as a markdown-only source so the JSON output
+        // stays a faithful passthrough of the raw API body. Renderer reads
+        // data.category_name.
+        if (body) {
+            const tc = body.transaction_criteria || {};
+            const ov = body.overrides || {};
+            const catId = ov.category_id != null ? ov.category_id : tc.category_id;
+            if (catId != null) {
+                const categories = await getCategoriesData(LM_API_TOKEN).catch(() => []);
+                const name = buildCategoryNameMap(categories).get(catId);
+                if (name) return mcpResponse.success(body, { ...body, category_name: name });
+            }
+        }
         return mcpResponse.success(body);
     },
 
@@ -723,11 +930,10 @@ const toolHandlers = {
         const body = summaryRes.body;
 
         // Build category map if available to resolve category IDs to names
-        const categoryMap = new Map();
+        let categoryMap = new Map();
         if (categoriesRes && (categoriesRes.status === 200 || categoriesRes.status === 201) && categoriesRes.body && Array.isArray(categoriesRes.body.categories)) {
-            for (const cat of categoriesRes.body.categories) {
-                categoryMap.set(cat.id, cat.name);
-            }
+            // Flatten parents + children: budget rows are keyed by child id.
+            categoryMap = buildCategoryNameMap(categoriesRes.body.categories);
         }
 
         // Resolve names in categories array
@@ -896,7 +1102,8 @@ const toolHandlers = {
 
             if (include_category_names) {
                 const categories = await getCategoriesData(LM_API_TOKEN).catch(() => []);
-                categoryMap = new Map(categories.map(c => [c.id, c.name]));
+                // Walk children too: most transactions reference a subcategory id.
+                categoryMap = buildCategoryNameMap(categories);
             }
 
             if (include_tag_names) {
@@ -1157,7 +1364,7 @@ const TOOLS = [
                 include_exclude_from_budgets: { type: "boolean", default: false, description: "Include items marked 'exclude from budget'." },
                 include_occurrences: { type: "boolean", default: false, description: "Include actual transaction occurrences in the summary." },
                 include_past_budget_dates: { type: "boolean", default: false, description: "Include past budget dates." },
-                include_totals: { type: "boolean", default: false, description: "Include overall totals." },
+                include_totals: { type: "boolean", default: true, description: "Include overall inflow/outflow totals (default true). The canonical \"how am I tracking against budget\" question wants the rollup, so it is included by default to avoid a second call; the totals are summarized in the markdown footer. Set false to omit and return per-category rows only." },
                 include_rollover_pool: { type: "boolean", default: false, description: "Include rollover calculations." }
             },
             oneOf: [
