@@ -56,6 +56,7 @@ const accountsCache = {
     data: null,
     lastFetched: 0,
     promise: null,
+    generation: 0,
     TTL: 60 * 1000 
 };
 
@@ -63,6 +64,7 @@ const categoriesCache = {
     data: null,
     lastFetched: 0,
     promise: null,
+    generation: 0,
     TTL: 60 * 1000
 };
 
@@ -70,6 +72,7 @@ const tagsCache = {
     data: null,
     lastFetched: 0,
     promise: null,
+    generation: 0,
     TTL: 60 * 1000
 };
 
@@ -203,6 +206,7 @@ async function getAccountsData(token) {
     if (accountsCache.data && (now - accountsCache.lastFetched <= accountsCache.TTL)) return accountsCache.data;
     if (accountsCache.promise) return accountsCache.promise;
     
+    const gen = accountsCache.generation;
     accountsCache.promise = (async () => {
         let manual, plaid;
         try {
@@ -217,14 +221,19 @@ async function getAccountsData(token) {
         if (manual.status !== 200) throw new Error(`Manual accounts fetch failed: ${extractError(manual.body, manual.status)}`);
         if (plaid.status !== 200) throw new Error(`Plaid accounts fetch failed: ${extractError(plaid.body, plaid.status)}`);
 
-        accountsCache.data = {
+        const result = {
             manual: manual.body.manual_accounts || [],
             synced: plaid.body.plaid_accounts || []
         };
-        accountsCache.lastFetched = Date.now();
-        return accountsCache.data;
+        // Only write back if no clear_cache happened while this fetch was in
+        // flight. Otherwise a clear would be silently undone by a late resolver.
+        if (gen === accountsCache.generation) {
+            accountsCache.data = result;
+            accountsCache.lastFetched = Date.now();
+        }
+        return result;
     })().finally(() => {
-        accountsCache.promise = null;
+        if (gen === accountsCache.generation) accountsCache.promise = null;
     });
     return accountsCache.promise;
 }
@@ -234,14 +243,18 @@ async function getCategoriesData(token) {
     if (categoriesCache.data && (now - categoriesCache.lastFetched <= categoriesCache.TTL)) return categoriesCache.data;
     if (categoriesCache.promise) return categoriesCache.promise;
 
+    const gen = categoriesCache.generation;
     categoriesCache.promise = (async () => {
         const { status, body } = await nativeFetch("/categories", "GET", token);
         if (status !== 200 && status !== 201) throw new Error(`Categories fetch failed: ${extractError(body, status)}`);
-        categoriesCache.data = body.categories || [];
-        categoriesCache.lastFetched = Date.now();
-        return categoriesCache.data;
+        const result = body.categories || [];
+        if (gen === categoriesCache.generation) {
+            categoriesCache.data = result;
+            categoriesCache.lastFetched = Date.now();
+        }
+        return result;
     })().finally(() => {
-        categoriesCache.promise = null;
+        if (gen === categoriesCache.generation) categoriesCache.promise = null;
     });
     return categoriesCache.promise;
 }
@@ -251,15 +264,18 @@ async function getTagsData(token) {
     if (tagsCache.data && (now - tagsCache.lastFetched <= tagsCache.TTL)) return tagsCache.data;
     if (tagsCache.promise) return tagsCache.promise;
 
+    const gen = tagsCache.generation;
     tagsCache.promise = (async () => {
         const { status, body } = await nativeFetch("/tags", "GET", token);
         if (status !== 200) throw new Error(`Tags fetch failed: ${extractError(body, status)}`);
         const tagsArray = body && body.tags ? body.tags : (Array.isArray(body) ? body : []);
-        tagsCache.data = tagsArray;
-        tagsCache.lastFetched = Date.now();
-        return tagsCache.data;
+        if (gen === tagsCache.generation) {
+            tagsCache.data = tagsArray;
+            tagsCache.lastFetched = Date.now();
+        }
+        return tagsArray;
     })().finally(() => {
-        tagsCache.promise = null;
+        if (gen === tagsCache.generation) tagsCache.promise = null;
     });
     return tagsCache.promise;
 }
@@ -411,12 +427,18 @@ const mcpResponse = {
 // ==========================================
 const toolHandlers = {
     "clear_cache": async () => {
-        accountsCache.data = null;
-        accountsCache.lastFetched = 0;
-        categoriesCache.data = null;
-        categoriesCache.lastFetched = 0;
-        tagsCache.data = null;
-        tagsCache.lastFetched = 0;
+        // Also drop any in-flight fetch promise. Nulling only data/lastFetched
+        // leaves a pending single-flight promise that resolves AFTER the clear
+        // and silently repopulates the cache, so the clear would not stick under
+        // concurrency (proven via live race probe). Dropping the promise detaches
+        // that resolution: it still settles for its awaiters but no longer writes
+        // back into the (already cleared) cache slot.
+        for (const c of [accountsCache, categoriesCache, tagsCache]) {
+            c.data = null;
+            c.lastFetched = 0;
+            c.promise = null;
+            c.generation++;
+        }
         return mcpResponse.success({ message: "Internal memory cache cleared successfully." });
     },
 
