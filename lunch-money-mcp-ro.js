@@ -992,7 +992,7 @@ const toolHandlers = {
     },
 
     "list_transactions": async (args) => {
-        const { timeframe, search, include_category_names, include_tag_names, category_ids, category_group_id } = args || {};
+        const { timeframe, search, include_category_names, include_tag_names, category_ids, category_group_id, fields, concise } = args || {};
         const apiArgs = {};
         
         // Includes 'offset' to enable proper native loop pagination capabilities
@@ -1159,6 +1159,32 @@ const toolHandlers = {
                     t.tag_names = t.tags.map(tag => tag.name);
                 }
             }
+        }
+
+        // Optional field projection to cut token cost. A full v2 transaction has
+        // ~23 fields, many null/rarely useful for analysis (created_at/updated_at,
+        // original_name duplicating payee, split/group booleans, external_id...).
+        // `concise: true` returns a curated lean shape; `fields: [...]` returns an
+        // explicit allowlist. Enriched names (category_name/tag_names) are included
+        // by `concise` only when the corresponding include_* flag was set.
+        const CONCISE_FIELDS = ["id", "date", "amount", "currency", "payee", "category_id", "recurring_id", "status", "notes"];
+        let projection = null;
+        if (Array.isArray(fields) && fields.length > 0) {
+            projection = fields;
+        } else if (concise) {
+            projection = CONCISE_FIELDS.slice();
+            if (include_category_names) projection.push("category_name");
+            if (include_tag_names) projection.push("tag_names");
+        }
+        if (projection) {
+            const keys = projection;
+            result = result.map(t => {
+                const out = {};
+                for (const k of keys) {
+                    if (t[k] !== undefined) out[k] = t[k];
+                }
+                return out;
+            });
         }
 
         return mcpResponse.success({
@@ -1343,13 +1369,23 @@ const TOOLS = [
                 search: { type: "string", maxLength: 100, description: "Search term matched against payee, notes, or original name (max 100 chars)." },
                 include_category_names: { 
                     type: "boolean", 
-                    default: false, 
-                    description: "Resolve and include category_name." 
+                    default: true, 
+                    description: "Resolve and include category_name from category_id (default true). A bare category_id is not human-meaningful, so this is resolved by default to avoid a follow-up list_categories call; names come from the cached categories list, so there is no extra network round trip in the common case. Set false to return only the raw category_id." 
                 },
                 include_tag_names: { 
                     type: "boolean", 
                     default: false, 
                     description: "Resolve and include tags and tag_names." 
+                },
+                concise: {
+                    type: "boolean",
+                    default: true,
+                    description: "Return a lean per-transaction shape (id, date, amount, currency, payee, category_id, category_name, recurring_id, status, notes), dropping timestamps, original_name, to_base, and split/group/source metadata. This is the default because it cuts token cost ~3-4x and covers the common analysis case. Set concise:false to get the full ~23-field record (original_name, to_base, account ids, split/group booleans, external_id, timestamps, ...) when you need exhaustive fidelity. Enriched names (category_name/tag_names) are added when the matching include_* flag is set (category_name is on by default). Ignored if 'fields' is provided."
+                },
+                fields: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Explicit allowlist of transaction fields to return (e.g. ['id','date','amount','payee','category_name']). Overrides 'concise'. Use to minimize tokens when you know exactly which fields you need."
                 }
             },
             oneOf: [
