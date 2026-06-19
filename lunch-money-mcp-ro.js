@@ -113,14 +113,22 @@ function buildQueryString(args) {
     return parts.length > 0 ? `?${parts.join('&')}` : "";
 }
 
+function isEmptyValue(val) {
+    if (val === null || val === undefined || val === "") return true;
+    if (Array.isArray(val)) return val.length === 0;
+    if (typeof val === 'object') return Object.keys(val).length === 0;
+    return false;
+}
+
 function cleanObject(obj) {
     if (Array.isArray(obj)) {
         return obj.map(cleanObject);
     } else if (obj !== null && typeof obj === 'object') {
         const cleaned = {};
         for (const [key, val] of Object.entries(obj)) {
-            if (val !== undefined) {
-                cleaned[key] = cleanObject(val);
+            const cleanedVal = cleanObject(val);
+            if (!isEmptyValue(cleanedVal)) {
+                cleaned[key] = cleanedVal;
             }
         }
         return cleaned;
@@ -133,6 +141,75 @@ function formatDateUTC(date) {
     const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
     const dd = String(date.getUTCDate()).padStart(2, '0');
     return `${yyyy}-${mm}-${dd}`;
+}
+
+// The /categories response is a forest: top-level categories may be groups
+// whose subcategories live in a `children` array (and children carry group_id).
+// Most transactions and budget rows reference a CHILD category id, so any
+// id->name lookup that walks only the top level silently fails to resolve the
+// majority of real data. Flatten parents and children into one list.
+function flattenCategories(categories) {
+    const out = [];
+    if (!Array.isArray(categories)) return out;
+    for (const cat of categories) {
+        if (!cat) continue;
+        out.push(cat);
+        if (Array.isArray(cat.children)) {
+            for (const child of cat.children) {
+                if (child) out.push(child);
+            }
+        }
+    }
+    return out;
+}
+
+// Build an id -> name Map covering every category at any depth.
+function buildCategoryNameMap(categories) {
+    const map = new Map();
+    for (const cat of flattenCategories(categories)) {
+        if (cat.id !== undefined && cat.id !== null) map.set(cat.id, cat.name);
+    }
+    return map;
+}
+
+// Lunch Money returns transaction amounts as fixed-decimal STRINGS ("126.8500")
+// and budget totals as JSON numbers (IEEE-754 floats). We never do arithmetic
+// on transaction strings, but budget activity must be summed, and naive float
+// addition leaks noise like 43.360000000000014 into output. Sum in integer
+// cents and format to 2 dp only at render. Returns a string; passes through
+// null/undefined and any non-finite input untouched.
+function formatMoney(value) {
+    if (value === null || value === undefined) return value;
+    const n = typeof value === "string" ? Number(value) : value;
+    if (typeof n !== "number" || !Number.isFinite(n)) return value;
+    return (Math.round(n * 100) / 100).toFixed(2);
+}
+
+// Add money values without float drift by working in integer cents.
+function addMoney(...values) {
+    let cents = 0;
+    for (const v of values) {
+        const n = typeof v === "string" ? Number(v) : v;
+        if (typeof n === "number" && Number.isFinite(n)) cents += Math.round(n * 100);
+    }
+    return cents / 100;
+}
+
+// Lunch Money HTML-encodes user-authored text (tag/category/account names,
+// payees, notes) in API responses, e.g. "Penny&#x27;s". The markdown we emit
+// is plain text for humans, not HTML, so decode the common entities back to
+// their literal characters. Applied only on the rendered markdown string;
+// the output_format:"json" path passes the raw API payload through untouched.
+function decodeEntities(text) {
+    if (typeof text !== "string" || text.indexOf("&") === -1) return text;
+    return text
+        .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+        .replace(/&#[xX]([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&amp;/g, "&");
 }
 
 function resolveTimeframe(timeframe) {
