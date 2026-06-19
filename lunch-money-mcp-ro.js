@@ -49,6 +49,15 @@ if (!LM_API_TOKEN) {
     process.exit(1);
 }
 
+// Page size for the in-memory-filtering transaction loop (search / multi-category
+// / category-group queries). Defaults to 2000 (one round-trip for typical
+// accounts). Override with LM_TX_BATCH_LIMIT on networks/proxies that cap
+// response body size; smaller pages mean more round-trips but smaller payloads.
+const TX_BATCH_LIMIT = (() => {
+    const v = Number(process.env.LM_TX_BATCH_LIMIT);
+    return Number.isFinite(v) && v >= 1 && v <= 2000 ? Math.floor(v) : 2000;
+})();
+
 // ==========================================
 // 2. CACHE CONFIGURATION
 // ==========================================
@@ -1058,7 +1067,7 @@ const toolHandlers = {
 
         if (needsInMemoryFiltering) {
             let currentOffset = 0;
-            const batchLimit = 2000;
+            const batchLimit = TX_BATCH_LIMIT;
 
             // Remove pagination fields from root arguments since we will manage them in the loop
             delete apiArgs.limit;
