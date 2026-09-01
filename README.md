@@ -17,6 +17,9 @@ This server allows LLMs (like Claude Desktop, Cursor, or other MCP clients) to r
 
 - **Read-Only Security**: Only retrieves data (`GET` requests). No destructive or modifying actions are supported.
 - **Strict Input Validation**: Uses `ajv` (v8) and `ajv-formats` for validating input arguments against defined tool schemas.
+- **Automatic Category & Tag Enrichment**: Resolves human-readable category and tag names by default (`include_category_names: true`, `include_tag_names: true`) via cached metadata, avoiding tedious secondary lookups.
+- **Accounting Sign Convention**: Follows standard Lunch Money semantics (`amount > 0` = Expense / Outflow / Debit; `amount < 0` = Income / Inflow / Credit).
+- **MCP Protocol Instructions**: Emits native server instructions on `initialize` so connecting LLM clients automatically adhere to date querying, auditing, and sign convention rules.
 - **MCP Resources**: Exposes system-level data such as accounts list and budget settings directly as MCP resources.
 - **MCP Prompts**: Includes handy pre-packaged prompts (`analyze_spending` and `find_untagged`) for spending analysis and tag suggestion.
 - **Performance Caching**: In-memory caching for `categories` and `tags` (60s TTL) to minimize redundant external API requests and lower latency.
@@ -128,15 +131,15 @@ All tools accept a global parameter:
 - `output_format` (string, optional, default: `"markdown"`): Renders response as `"markdown"` (formatted tables/lists) or `"json"`.
 
 ### 1. `list_transactions`
-Search, filter, and list historical transactions.
+Search, filter, and list historical transactions (+Amount = Expense, -Amount = Income).
 
 > [!NOTE]
 > **Performance & Recursive Fetching**
 > Using `search`, `category_ids`, or `category_group_id` triggers in-memory filtering because the Lunch Money API doesn't support these parameters natively. The server will recursively page through the API (up to a safety limit of 50,000 transactions) to retrieve the complete candidate set. Always specify a timeframe (e.g. `this_month`, `year_to_date`) when using these filters to optimize performance and avoid excessive API requests.
 
 - **Arguments**:
-  - `start_date` (string, optional): Format `YYYY-MM-DD`
-  - `end_date` (string, optional): Format `YYYY-MM-DD`
+  - `start_date` (string, optional): Format `YYYY-MM-DD`. If provided without `end_date`, `end_date` defaults to current UTC date.
+  - `end_date` (string, optional): Format `YYYY-MM-DD`. If provided, `start_date` is required.
   - `timeframe` (string, optional): Predefined timeframe (`this_month`, `last_month`, `year_to_date`, `this_year`, `last_year`). Mutually exclusive with `start_date`/`end_date`.
   - `created_since` (string, optional): Filter transactions created after this ISO 8601 timestamp.
   - `updated_since` (string, optional): Filter transactions updated after this ISO 8601 timestamp.
@@ -145,22 +148,24 @@ Search, filter, and list historical transactions.
   - `recurring_id` (integer, optional): Filter by recurring transaction ID.
   - `category_id` (integer, optional): Filter by single category ID.
   - `category_ids` (array of integers, optional): Filter by multiple category IDs.
-  - `category_group_id` (integer, optional): Filter by parent category group ID (resolves to all child categories).
+  - `category_group_id` (integer, optional): Filter by parent category group ID (automatically includes child categories).
   - `tag_id` (integer, optional): Filter by tag ID.
   - `is_group_parent` (boolean, optional): Filter to return only parent transactions of a group.
   - `status` (string, optional): Filter by transaction status (`reviewed`, `unreviewed`, `delete_pending`).
   - `is_pending` (boolean, optional): Filter for pending transactions.
-  - `include_pending` (boolean, optional, default: `false`)
-  - `include_metadata` (boolean, optional, default: `false`)
-  - `include_split_parents` (boolean, optional, default: `false`)
-  - `include_group_children` (boolean, optional, default: `false`)
-  - `include_children` (boolean, optional, default: `false`)
-  - `include_files` (boolean, optional, default: `false`)
+  - `include_pending` (boolean, optional, default: `false`): Include pending transactions in results.
+  - `include_metadata` (boolean, optional, default: `false`): Include developer metadata in response.
+  - `include_split_parents` (boolean, optional, default: `false`): Include parent transactions of split transactions.
+  - `include_group_children` (boolean, optional, default: `false`): Include child items of group transactions. Set `true` for detailed audits (beware of double-counting group parent totals).
+  - `include_children` (boolean, optional, default: `false`): Include child line-items of split transactions. Set `true` for detailed audits (beware of double-counting split parent totals).
+  - `include_files` (boolean, optional, default: `false`): Include file attachment metadata.
   - `limit` (integer, optional, minimum: `1`, maximum: `2000`, default: `1000`): Maximum transactions to return.
   - `offset` (integer, optional, minimum: `0`): Number of transactions to skip for pagination.
   - `search` (string, optional, max 100 characters): Search term matched against payee, notes, or original name.
-  - `include_category_names` (boolean, optional, default: `false`): Resolves and includes `category_name` on each transaction.
-  - `include_tag_names` (boolean, optional, default: `false`): Resolves and includes `tag_names` and `tags` objects on each transaction.
+  - `include_category_names` (boolean, optional, default: `true`): Resolves and attaches `category_name` from cached categories.
+  - `include_tag_names` (boolean, optional, default: `true`): Resolves and attaches `tag_names` and `tags` objects from cached tags.
+  - `concise` (boolean, optional, default: `true`): Returns lean ~10-field transaction records. Set `concise: false` for full ~23-field records.
+  - `fields` (array of strings, optional): Explicit allowlist of fields to return (e.g. `['id', 'date', 'amount', 'payee', 'category_name', 'tag_names']`).
 
 ### 2. `list_tags`
 List all custom tags.
@@ -172,31 +177,31 @@ Get details of a single tag by ID.
   - `id` (integer): The unique tag ID.
 
 ### 4. `get_tags_by_ids`
-Get details for a specific subset of tags by their IDs.
+Get details for a specific subset of tags by their IDs (resolved from cache).
 - **Arguments** (Required):
   - `ids` (array of integers): An array of tag IDs to resolve.
 
 ### 5. `list_recurring_items`
-List recurring transaction items.
+List recurring transaction items and schedules (+Amount = Expense, -Amount = Income).
 - **Arguments** (Optional):
-  - `start_date` (string): Format `YYYY-MM-DD`
-  - `end_date` (string): Format `YYYY-MM-DD`
-  - `include_suggested` (boolean): Include system-suggested recurring items.
-  - `status` (string, enum: `["suggested", "manual", "reviewed"]`): Filter by status.
+  - `start_date` (string): Filter by start date (YYYY-MM-DD).
+  - `end_date` (string): End date for calculating occurrences (YYYY-MM-DD).
+  - `include_suggested` (boolean, default: `false`): Include system-suggested recurring items.
+  - `status` (string, enum: `["suggested", "reviewed"]`): Filter by status.
 
 ### 6. `get_recurring_item`
-Get details of a recurring transaction item by ID.
+Get details of a recurring transaction item by ID (+Amount = Expense, -Amount = Income).
 - **Arguments**:
   - `id` (integer, Required): The unique recurring item ID.
   - `start_date` (string, optional): Start date for calculating occurrences (YYYY-MM-DD).
   - `end_date` (string, optional): End date for calculating occurrences (YYYY-MM-DD).
 
 ### 7. `get_budget_settings`
-Get general budget settings including currency.
+Get general budget settings including primary currency.
 - **Arguments**: None
 
 ### 8. `get_budget_summary`
-Get budget summary with category totals and usage.
+Get budget summary with category totals, activity (+Amount = Expense, -Amount = Income), and balances.
 - **Arguments**:
   - `start_date` (string, optional): Start date (Required if `timeframe` is omitted).
   - `end_date` (string, optional): End date (Required if `timeframe` is omitted).
@@ -204,14 +209,14 @@ Get budget summary with category totals and usage.
   - `include_exclude_from_budgets` (boolean, optional, default: `false`)
   - `include_occurrences` (boolean, optional, default: `false`)
   - `include_past_budget_dates` (boolean, optional, default: `false`)
-  - `include_totals` (boolean, optional, default: `false`)
+  - `include_totals` (boolean, optional, default: `true`): Include overall inflow/outflow rollup totals in summary.
   - `include_rollover_pool` (boolean, optional, default: `false`)
 
 ### 9. `list_categories`
-List all categories.
+List all categories and category groups.
 - **Arguments** (Optional):
-  - `format` (string, enum: `["nested", "flattened"]`, default: `"nested"`): Format of the categories list.
-  - `is_group` (boolean): Filter for category groups.
+  - `format` (string, enum: `["nested", "flattened"]`, default: `"nested"`): Format of categories list ('nested' with subcategories in children, or 'flattened').
+  - `is_group` (boolean): Filter for category groups only.
 
 ### 10. `get_category`
 Get details of a single category by ID.
@@ -219,7 +224,7 @@ Get details of a single category by ID.
   - `id` (integer): The unique category ID.
 
 ### 11. `get_categories_by_ids`
-Get details for a specific subset of categories by their IDs.
+Get details for a specific subset of categories by their IDs (resolved from cache).
 - **Arguments** (Required):
   - `ids` (array of integers): An array of category IDs to resolve.
 
@@ -238,7 +243,7 @@ Get details of a Plaid-synced account by ID.
   - `id` (integer): The unique Plaid account ID.
 
 ### 15. `get_account`
-Get details of an account by ID, checking both manual and Plaid-synced accounts.
+Get details of an account by ID (checks both manual and Plaid-synced accounts).
 - **Arguments** (Required):
   - `id` (integer): The unique account ID.
 
@@ -247,7 +252,7 @@ Get the current user's profile information.
 - **Arguments**: None
 
 ### 17. `get_transaction`
-Get details of a single transaction by ID.
+Get details of a single transaction by ID (+Amount = Expense, -Amount = Income).
 - **Arguments** (Required):
   - `id` (integer): The unique transaction ID.
 
@@ -257,5 +262,5 @@ Get a temporary download URL for a transaction attachment.
   - `file_id` (integer): The ID of the attachment file.
 
 ### 19. `clear_cache`
-Clear the cached accounts data.
+Clear internal in-memory caches (accounts, categories, tags).
 - **Arguments**: None

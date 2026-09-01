@@ -275,7 +275,7 @@ function resolveTimeframe(timeframe) {
     return { startDate, endDate };
 }
 
-async function nativeFetch(endpointPath, method = "GET", token) {
+async function nativeFetch(endpointPath, method = "GET", token, retries = 3) {
     return new Promise((resolve, reject) => {
         const options = {
             protocol: TARGET_PROTOCOL,
@@ -293,7 +293,17 @@ async function nativeFetch(endpointPath, method = "GET", token) {
         const req = TARGET_TRANSPORT.request(options, (res) => {
             let data = "";
             res.on("data", (chunk) => data += chunk);
-            res.on("end", () => {
+            res.on("end", async () => {
+                if (res.statusCode === 429 && retries > 0) {
+                    const retryAfter = Number(res.headers['retry-after']) || 1;
+                    await new Promise(r => setTimeout(r, Math.max(750, retryAfter * 1000)));
+                    try {
+                        resolve(await nativeFetch(endpointPath, method, token, retries - 1));
+                    } catch (e) {
+                        reject(e);
+                    }
+                    return;
+                }
                 try {
                     resolve({ status: res.statusCode, body: data ? JSON.parse(data) : {} });
                 } catch (err) {
@@ -1029,6 +1039,8 @@ const toolHandlers = {
             const { startDate, endDate } = resolveTimeframe(timeframe);
             apiArgs.start_date = startDate; 
             apiArgs.end_date = endDate;
+        } else if (apiArgs.start_date && !apiArgs.end_date) {
+            apiArgs.end_date = formatDateUTC(new Date());
         }
 
         // Resolve child categories if filtering by group
@@ -1154,27 +1166,30 @@ const toolHandlers = {
             result = slicedResult;
         }
 
-        // Resolve and join category and/or tag names if requested (Optimized: done after slicing)
-        if (include_category_names || include_tag_names) {
+        // Resolve and join category and/or tag names if requested (both default to true)
+        const shouldIncludeCategoryNames = include_category_names !== false;
+        const shouldIncludeTagNames = include_tag_names !== false;
+
+        if (shouldIncludeCategoryNames || shouldIncludeTagNames) {
             let categoryMap = null;
             let tagMap = null;
 
-            if (include_category_names) {
+            if (shouldIncludeCategoryNames) {
                 const categories = await getCategoriesData(LM_API_TOKEN).catch(() => []);
                 // Walk children too: most transactions reference a subcategory id.
                 categoryMap = buildCategoryNameMap(categories);
             }
 
-            if (include_tag_names) {
+            if (shouldIncludeTagNames) {
                 const tags = await getTagsData(LM_API_TOKEN).catch(() => []);
                 tagMap = new Map(tags.map(t => [t.id, t]));
             }
 
             for (const t of result) {
-                if (include_category_names && t.category_id !== null && t.category_id !== undefined) {
+                if (shouldIncludeCategoryNames && t.category_id !== null && t.category_id !== undefined) {
                     t.category_name = categoryMap?.get(t.category_id) || null;
                 }
-                if (include_tag_names && t.tag_ids && Array.isArray(t.tag_ids)) {
+                if (shouldIncludeTagNames && t.tag_ids && Array.isArray(t.tag_ids)) {
                     t.tags = t.tag_ids.map(id => tagMap?.get(id)).filter(Boolean);
                     t.tag_names = t.tags.map(tag => tag.name);
                 }
@@ -1186,15 +1201,15 @@ const toolHandlers = {
         // original_name duplicating payee, split/group booleans, external_id...).
         // `concise: true` returns a curated lean shape; `fields: [...]` returns an
         // explicit allowlist. Enriched names (category_name/tag_names) are included
-        // by `concise` only when the corresponding include_* flag was set.
+        // by `concise` when their corresponding include_* flags are active.
         const CONCISE_FIELDS = ["id", "date", "amount", "currency", "payee", "category_id", "recurring_id", "status", "notes"];
         let projection = null;
         if (Array.isArray(fields) && fields.length > 0) {
             projection = fields;
-        } else if (concise) {
+        } else if (concise !== false) {
             projection = CONCISE_FIELDS.slice();
-            if (include_category_names) projection.push("category_name");
-            if (include_tag_names) projection.push("tag_names");
+            if (shouldIncludeCategoryNames) projection.push("category_name");
+            if (shouldIncludeTagNames) projection.push("tag_names");
         }
         if (projection) {
             const keys = projection;
@@ -1229,7 +1244,7 @@ const toolHandlers = {
 const TOOLS = [
     { 
         name: "clear_cache", 
-        description: "Clear the cached accounts data.", 
+        description: "Clear internal in-memory caches (accounts, categories, tags).", 
         inputSchema: { type: "object", properties: {} } 
     },
     { 
@@ -1239,7 +1254,7 @@ const TOOLS = [
     },
     { 
         name: "get_transaction", 
-        description: "Get details of a single transaction by ID.", 
+        description: "Get details of a single transaction by ID (Amounts: +Expense, -Income).", 
         inputSchema: { 
             type: "object", 
             properties: { 
@@ -1261,7 +1276,7 @@ const TOOLS = [
     },
     { 
         name: "get_categories_by_ids", 
-        description: "Get details for a specific subset of categories by their IDs.", 
+        description: "Get details for a specific subset of categories by their IDs (resolved from cache).", 
         inputSchema: { 
             type: "object", 
             properties: { 
@@ -1287,7 +1302,7 @@ const TOOLS = [
     },
     { 
         name: "get_tags_by_ids", 
-        description: "Get details for a specific subset of tags by their IDs.", 
+        description: "Get details for a specific subset of tags by their IDs (resolved from cache).", 
         inputSchema: { 
             type: "object", 
             properties: { 
@@ -1302,7 +1317,7 @@ const TOOLS = [
     },
     { 
         name: "get_recurring_item", 
-        description: "Get details of a recurring transaction item by ID.", 
+        description: "Get details of a recurring transaction item by ID (Amounts: +Expense, -Income).", 
         inputSchema: { 
             type: "object", 
             properties: { 
@@ -1341,7 +1356,7 @@ const TOOLS = [
     },
     { 
         name: "get_account", 
-        description: "Get details of an account by ID, checking both manual and Plaid-synced accounts.", 
+        description: "Get details of an account by ID (checks both manual and Plaid-synced accounts).", 
         inputSchema: { 
             type: "object", 
             properties: { 
@@ -1352,13 +1367,13 @@ const TOOLS = [
     },
     {
         name: "list_transactions",
-        description: "List transactions. Note: Filtering by search, category_ids, or category_group_id uses recursive fetching. Use a timeframe to avoid rate limits.",
+        description: "List and filter transactions (Amounts: +Expense, -Income). Supports date bounds, category groups, search, and concise field projection.",
         inputSchema: {
             type: "object",
             properties: {
-                start_date: { type: "string", format: "date", description: "Start date to filter transactions (YYYY-MM-DD)." }, 
-                end_date: { type: "string", format: "date", description: "End date to filter transactions (YYYY-MM-DD)." },
-                timeframe: { type: "string", enum: ["this_month", "last_month", "year_to_date", "this_year", "last_year"], description: "Predefined timeframe filter (e.g., this_month, last_month)." },
+                start_date: { type: "string", format: "date", description: "Start date to filter transactions (YYYY-MM-DD). If provided without end_date, end_date defaults to today's UTC date." }, 
+                end_date: { type: "string", format: "date", description: "End date to filter transactions (YYYY-MM-DD). If provided, start_date is required." },
+                timeframe: { type: "string", enum: ["this_month", "last_month", "year_to_date", "this_year", "last_year"], description: "Predefined timeframe filter (e.g. this_month, last_month). Mutually exclusive with start_date/end_date." },
                 created_since: { type: "string", description: "Filter transactions created after this timestamp (ISO 8601)." },
                 updated_since: { type: "string", description: "Filter transactions updated after this timestamp (ISO 8601)." },
                 manual_account_id: { type: "integer", description: "Filter by manual account ID." }, 
@@ -1372,41 +1387,44 @@ const TOOLS = [
                 },
                 category_group_id: { 
                     type: "integer", 
-                    description: "Filter by parent category group ID (includes child categories)." 
+                    description: "Filter by parent category group ID (automatically includes child categories)." 
                 },
                 tag_id: { type: "integer", description: "Filter by tag ID." },
                 is_group_parent: { type: "boolean", description: "Filter to return only parent transactions of a group." },
                 status: { type: "string", enum: ["reviewed", "unreviewed", "delete_pending"], description: "Filter by transaction status." },
                 is_pending: { type: "boolean", description: "Filter for pending transactions." }, 
-                include_pending: { type: "boolean", default: false, description: "Include pending transactions in the results." },
-                include_metadata: { type: "boolean", default: false, description: "Include developer metadata in the response." },
-                include_split_parents: { type: "boolean", default: false, description: "Include parent transactions of split transactions." }, 
-                include_group_children: { type: "boolean", default: false, description: "Include child transactions of group transactions." }, 
-                include_children: { type: "boolean", default: false, description: "Include child transactions of split transactions in the response." },
-                include_files: { type: "boolean", default: false, description: "Include file attachment metadata." },
-                limit: { type: "integer", minimum: 1, maximum: 2000, default: 1000, description: "Maximum number of transactions to return (1-2000)." }, 
+                include_pending: { type: "boolean", default: false, description: "Include pending transactions in results (default false)." },
+                include_metadata: { type: "boolean", default: false, description: "Include developer metadata in response (default false)." },
+                include_split_parents: { type: "boolean", default: false, description: "Include parent transactions of split transactions (default false)." }, 
+                include_group_children: { type: "boolean", default: false, description: "Include child transactions of group transactions (default false). Set true for detailed audits (beware of double-counting group parent totals)." }, 
+                include_children: { type: "boolean", default: false, description: "Include child transactions of split transactions (default false). Set true for detailed audits (beware of double-counting split parent totals)." }, 
+                include_files: { type: "boolean", default: false, description: "Include file attachment metadata (default false)." },
+                limit: { type: "integer", minimum: 1, maximum: 2000, default: 1000, description: "Maximum number of transactions to return (1-2000, default 1000)." }, 
                 offset: { type: "integer", minimum: 0, description: "Number of transactions to skip for pagination." },
                 search: { type: "string", maxLength: 100, description: "Search term matched against payee, notes, or original name (max 100 chars)." },
                 include_category_names: { 
                     type: "boolean", 
                     default: true, 
-                    description: "Resolve and include category_name from category_id (default true). A bare category_id is not human-meaningful, so this is resolved by default to avoid a follow-up list_categories call; names come from the cached categories list, so there is no extra network round trip in the common case. Set false to return only the raw category_id." 
+                    description: "Resolve and attach category_name from cached categories (default true). Set false for raw category_id only." 
                 },
                 include_tag_names: { 
                     type: "boolean", 
-                    default: false, 
-                    description: "Resolve and include tags and tag_names." 
+                    default: true, 
+                    description: "Resolve and attach tag_names and tags from cached tags (default true). Set false to omit tag resolution." 
                 },
                 concise: {
                     type: "boolean",
                     default: true,
-                    description: "Return a lean per-transaction shape (id, date, amount, currency, payee, category_id, category_name, recurring_id, status, notes), dropping timestamps, original_name, to_base, and split/group/source metadata. This is the default because it cuts token cost ~3-4x and covers the common analysis case. Set concise:false to get the full ~23-field record (original_name, to_base, account ids, split/group booleans, external_id, timestamps, ...) when you need exhaustive fidelity. Enriched names (category_name/tag_names) are added when the matching include_* flag is set (category_name is on by default). Ignored if 'fields' is provided."
+                    description: "Return lean ~10-field transaction records (default true). Set false or provide 'fields' for the full ~23-field raw object."
                 },
                 fields: {
                     type: "array",
                     items: { type: "string" },
-                    description: "Explicit allowlist of transaction fields to return (e.g. ['id','date','amount','payee','category_name']). Overrides 'concise'. Use to minimize tokens when you know exactly which fields you need."
+                    description: "Explicit allowlist of transaction fields to return (e.g. ['id','date','amount','payee','category_name','tag_names']). Overrides 'concise'."
                 }
+            },
+            dependencies: {
+                end_date: ["start_date"]
             },
             oneOf: [
                 {
@@ -1431,36 +1449,36 @@ const TOOLS = [
     },
     { 
         name: "list_recurring_items", 
-        description: "List recurring transaction items.", 
+        description: "List recurring transaction items and schedules (Amounts: +Expense, -Income).", 
         inputSchema: { 
             type: "object", 
             properties: { 
                 start_date: { type: "string", format: "date", description: "Filter by start date (YYYY-MM-DD)." }, 
-                end_date: { type: "string", format: "date", description: "Filter by end date (YYYY-MM-DD)." }, 
-                include_suggested: { type: "boolean", description: "Include system-suggested recurring items." },
+                end_date: { type: "string", format: "date", description: "End date for calculating occurrences (YYYY-MM-DD)." }, 
+                include_suggested: { type: "boolean", description: "Include system-suggested recurring items (default false)." },
                 status: { type: "string", enum: ["suggested", "reviewed"], description: "Filter by status: reviewed (confirmed) or suggested (system-detected) items." }
             } 
         } 
     },
     { 
         name: "get_budget_settings", 
-        description: "Get general budget settings including currency.", 
+        description: "Get general budget settings including primary currency.", 
         inputSchema: { type: "object", properties: {} } 
     },
     {
         name: "get_budget_summary",
-        description: "Get budget summary with category totals and usage.",
+        description: "Get budget summary with category totals, activity (Amounts: +Expense, -Income), and balances.",
         inputSchema: {
             type: "object",
             properties: {
                 start_date: { type: "string", format: "date", description: "Start date for budget summary (YYYY-MM-DD)." }, 
                 end_date: { type: "string", format: "date", description: "End date for budget summary (YYYY-MM-DD)." },
-                timeframe: { type: "string", enum: ["this_month", "last_month", "year_to_date", "this_year", "last_year"], description: "Predefined timeframe filter (e.g., this_month, last_month)." },
-                include_exclude_from_budgets: { type: "boolean", default: false, description: "Include items marked 'exclude from budget'." },
-                include_occurrences: { type: "boolean", default: false, description: "Include actual transaction occurrences in the summary." },
-                include_past_budget_dates: { type: "boolean", default: false, description: "Include past budget dates." },
-                include_totals: { type: "boolean", default: true, description: "Include overall inflow/outflow totals (default true). The canonical \"how am I tracking against budget\" question wants the rollup, so it is included by default to avoid a second call; the totals are summarized in the markdown footer. Set false to omit and return per-category rows only." },
-                include_rollover_pool: { type: "boolean", default: false, description: "Include rollover calculations." }
+                timeframe: { type: "string", enum: ["this_month", "last_month", "year_to_date", "this_year", "last_year"], description: "Predefined timeframe filter (e.g. this_month, last_month). Mutually exclusive with start_date/end_date." },
+                include_exclude_from_budgets: { type: "boolean", default: false, description: "Include items marked 'exclude from budget' (default false)." },
+                include_occurrences: { type: "boolean", default: false, description: "Include actual transaction occurrences in summary (default false)." },
+                include_past_budget_dates: { type: "boolean", default: false, description: "Include past budget dates (default false)." },
+                include_totals: { type: "boolean", default: true, description: "Include overall inflow/outflow rollup totals in summary (default true). Set false to return per-category rows only." },
+                include_rollover_pool: { type: "boolean", default: false, description: "Include rollover calculations (default false)." }
             },
             oneOf: [
                 {
@@ -1481,12 +1499,12 @@ const TOOLS = [
     },
     { 
         name: "list_categories", 
-        description: "List all categories.", 
+        description: "List all categories and category groups.", 
         inputSchema: { 
             type: "object", 
             properties: { 
-                format: { type: "string", enum: ["nested", "flattened"], default: "nested", description: "Format of the categories list ('nested' or 'flattened')." }, 
-                is_group: { type: "boolean", description: "Filter for category groups." } 
+                format: { type: "string", enum: ["nested", "flattened"], default: "nested", description: "Format of categories list ('nested' with subcategories in children, or 'flattened'). Default is 'nested'." }, 
+                is_group: { type: "boolean", description: "Filter for category groups only." } 
             } 
         } 
     },
@@ -1524,9 +1542,32 @@ for (const tool of TOOLS) {
     }
 }
 
+const SERVER_INSTRUCTIONS = `# Lunch Money MCP Server Instructions
+
+### Key Concepts & Conventions
+1. **Sign Convention:**
+   - \`amount > 0\`: Outflow / Expense / Debit
+   - \`amount < 0\`: Inflow / Income / Credit
+2. **Date Queries:**
+   - Prefer \`timeframe\` (e.g. \`this_month\`, \`last_month\`, \`year_to_date\`) or specify \`start_date\` (YYYY-MM-DD; \`end_date\` auto-defaults to today).
+3. **Auditing & Group/Split Transactions:**
+   - By default, split parents and group parents are returned, while their children are omitted to avoid double-counting totals.
+   - For line-item audits or receipt matching, set \`include_group_children: true\` and \`include_children: true\`.
+   - When aggregating sums, ensure you do not add parent totals and child totals together.
+4. **Categories & Exclusions:**
+   - Lunch Money organizes categories into parent groups and subcategories. Filter by \`category_group_id\` to automatically match all subcategories.
+   - Inspect \`exclude_from_budget\` and \`exclude_from_totals\` when evaluating living expenses vs transfers/investments.
+5. **Token Efficiency:**
+   - \`output_format: "markdown"\` (default) produces structured tables. Use \`output_format: "json"\` when raw programmatic data is required.
+   - \`concise: true\` (default on transactions) returns a curated ~10-field record. Use \`concise: false\` or \`fields: [...]\` for full metadata.
+   - Category and tag names are resolved automatically from local cache without extra API calls.`;
+
 const mcpServer = new Server(
-    { name: "lunchmoney-exhaustive-readonly-mcp", version: "2.2.0" },
-    { capabilities: { tools: {}, resources: {}, prompts: {} } }
+    { name: "lunchmoney-exhaustive-readonly-mcp", version: "2.3.0" },
+    { 
+        capabilities: { tools: {}, resources: {}, prompts: {} },
+        instructions: SERVER_INSTRUCTIONS
+    }
 );
 
 mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -1661,6 +1702,9 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
                 
                 if (hasTimeframe && (hasStartDate || hasEndDate)) {
                     return mcpResponse.error("Validation failed: You cannot specify both 'timeframe' and 'start_date'/'end_date' simultaneously.");
+                }
+                if (name === "list_transactions" && !hasTimeframe && hasEndDate && !hasStartDate) {
+                    return mcpResponse.error("Validation failed: When specifying 'end_date', 'start_date' must also be provided.");
                 }
                 if (name === "get_budget_summary" && !hasTimeframe && (!hasStartDate || !hasEndDate)) {
                     return mcpResponse.error("Validation failed: You must specify either 'timeframe' or both 'start_date' and 'end_date'.");

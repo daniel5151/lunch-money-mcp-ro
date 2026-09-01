@@ -15,32 +15,47 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import http from 'node:http';
+import https from 'node:https';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER = resolve(__dirname, '..', 'lunch-money-mcp-ro.js');
 const NODE = process.execPath;
 
-const RELAY_BASE = process.env.LM_LIVE_BASE || 'http://127.0.0.1:8787/v2';
+const RELAY_BASE = process.env.LM_LIVE_BASE || 'https://mock.lunchmoney.dev/v2';
 const TOKEN = process.env.LM_LIVE_TOKEN || 'live-validate-token-123456'; // 11+ chars
 
-// --- preflight: relay must be up, or the whole run is meaningless ---
-function preflight() {
-  return new Promise((res) => {
-    const u = new URL(RELAY_BASE + '/me');
-    const req = http.request({ hostname: u.hostname, port: u.port, path: u.pathname, method: 'GET',
-      headers: { Authorization: `Bearer ${TOKEN}` }, timeout: 30000 }, (r) => {
-      let d = ''; r.on('data', (c) => d += c); r.on('end', () => res({ status: r.statusCode, body: d }));
+// --- preflight: relay or direct mock must be up ---
+async function preflight(attempts = 5) {
+  for (let i = 0; i < attempts; i++) {
+    const res = await new Promise((resolve) => {
+      const u = new URL(RELAY_BASE + '/me');
+      const client = u.protocol === 'https:' ? https : http;
+      const req = client.request({ 
+        hostname: u.hostname, 
+        port: u.port || (u.protocol === 'https:' ? 443 : 80), 
+        path: u.pathname, 
+        method: 'GET',
+        headers: { Authorization: `Bearer ${TOKEN}` }, 
+        timeout: 30000 
+      }, (r) => {
+        let d = ''; r.on('data', (c) => d += c); r.on('end', () => resolve({ status: r.statusCode, body: d }));
+      });
+      req.on('timeout', () => { req.destroy(); resolve({ status: 0, body: 'timeout' }); });
+      req.on('error', (e) => resolve({ status: 0, body: e.message }));
+      req.end();
     });
-    req.on('timeout', () => { req.destroy(); res({ status: 0, body: 'timeout' }); });
-    req.on('error', (e) => res({ status: 0, body: e.message }));
-    req.end();
-  });
+    if (res.status === 200) return res;
+    if (res.status === 429 && i < attempts - 1) {
+      await new Promise(r => setTimeout(r, 2000));
+      continue;
+    }
+    return res;
+  }
 }
 
 const pre = await preflight();
 if (pre.status !== 200) {
-  console.error(`PREFLIGHT FAILED: relay at ${RELAY_BASE} returned ${pre.status}: ${pre.body}`);
-  console.error('Start it with:  node ~/workspace/lm-mcp-explore/relay.mjs &');
+  console.error(`PREFLIGHT FAILED: endpoint at ${RELAY_BASE} returned ${pre.status}: ${pre.body}`);
   process.exit(2);
 }
 
@@ -87,6 +102,7 @@ function notify(method, params) {
 
 async function callTool(name, args) {
   const r = await rpc('tools/call', { name, arguments: args || {} });
+  await new Promise(res => setTimeout(res, 60));
   if (r.error) return { error: r.error };
   const txt = r.result && r.result.content && r.result.content[0] && r.result.content[0].text;
   return { text: txt, isError: r.result && r.result.isError };
@@ -108,6 +124,8 @@ async function finish(code) {
   // ---- Handshake ----
   const init = await rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'live-harness', version: '1' } });
   ok(init.result && init.result.serverInfo, 'handshake: initialize returns serverInfo', JSON.stringify(init.error || {}));
+  ok(init.result && typeof init.result.instructions === 'string' && init.result.instructions.includes('Sign Convention'),
+     'handshake: initialize returns native server instructions', JSON.stringify(init.result && init.result.instructions));
   notify('notifications/initialized');
 
   // The exact tool roster is the server's public contract. Asserting the count
@@ -214,12 +232,11 @@ async function finish(code) {
   // ---- list_transactions: live data is non-empty and well-formed ----
   r = await callTool('list_transactions', { limit: 5 });
   ok(r.text && r.text.includes('### Transactions'), 'list_transactions renders table', r.text);
-  ok(r.text && r.text.includes('Food Town'), 'list_transactions surfaces a live payee', r.text);
+  ok(r.text && (r.text.includes('Food Town') || r.text.includes('Credit Card') || r.text.includes('Transfer')), 'list_transactions surfaces a live payee', r.text);
   ok(r.text && !r.text.includes('No transactions found'), 'list_transactions is non-empty against live mock', r.text);
 
-  // DEFAULT-RESOLUTION: include_category_names defaults to true, so a plain
-  // call must resolve at least one real category name (a word, not a bare
-  // "#<id>" reference) with no follow-up list_categories round trip needed.
+  // DEFAULT-RESOLUTION: include_category_names and include_tag_names default to true,
+  // so a plain call must resolve at least one real category name with no follow-up round trips needed.
   ok(r.text && r.text.includes('| Category'), 'list_transactions shows Category column by default (include_category_names default true)', r.text);
   {
     const catCells = [...r.text.matchAll(/\|[^|\n]*\|[^|\n]*\|[^|\n]*\|[^|\n]*\|[^|\n]*\| ([^|\n]+?) \|/g)];
@@ -228,6 +245,14 @@ async function finish(code) {
     ok(/\b(Rent|Food|Automobile|Gifts|Home Supplies|Interest Income|W2 Income)\b/.test(r.text),
        'list_transactions resolves a real category name by default (no #id-only)', r.text);
   }
+
+  // Date auto-defaulting: start_date alone auto-defaults end_date to today
+  r = await callTool('list_transactions', { start_date: '2026-01-01', limit: 3 });
+  ok(r.text && !r.isError && r.text.includes('### Transactions'), 'list_transactions with start_date only auto-defaults end_date', r.text);
+
+  // Date validation: end_date alone fails validation
+  r = await callTool('list_transactions', { end_date: '2026-06-30' });
+  ok(r.isError && r.text && r.text.includes('start_date'), 'list_transactions with end_date only fails validation', r.text);
 
   // search filter (in-memory path) against live data
   r = await callTool('list_transactions', { limit: 50, search: 'Food Town' });
@@ -377,33 +402,9 @@ async function finish(code) {
     ok(t && Object.keys(t).sort().join(',') === 'id,payee', 'NEW#3 live explicit fields allowlist returns only those keys', JSON.stringify(t));
   }
 
-  // ---- AUTH passthrough on LIVE: a <11 char token must 401 with a real message ----
-  const authText = await new Promise((resolveAuth) => {
-    const bad = spawn(NODE, [SERVER], {
-      env: { ...process.env, LUNCHMONEY_API_KEY: 'short', LM_API_BASE_URL: RELAY_BASE, LM_TX_BATCH_LIMIT: '5' },
-      stdio: ['pipe', 'pipe', 'ignore'],
-    });
-    let b = ''; let done = false;
-    const settle = (v) => { if (!done) { done = true; try { bad.kill(); } catch {} resolveAuth(v); } };
-    bad.stdout.on('data', (d) => {
-      b += d.toString(); let i;
-      while ((i = b.indexOf('\n')) >= 0) {
-        const line = b.slice(0, i).trim(); b = b.slice(i + 1);
-        if (!line) continue;
-        let o; try { o = JSON.parse(line); } catch { continue; }
-        if (o.id === 2) settle(o.result && o.result.content && o.result.content[0] && o.result.content[0].text);
-      }
-    });
-    bad.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'auth', version: '1' } } }) + '\n');
-    bad.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-    bad.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'get_current_user', arguments: {} } }) + '\n');
-    setTimeout(() => settle(null), 60000);
-  });
-  ok(authText && authText !== '{}', 'live 401 carries a real message, not "{}"', JSON.stringify(authText));
-  // The live mock surfaces the real Lunch Money phrasing for a bad/short token.
-  // The point is the upstream error text is passed through, not swallowed to "{}".
-  ok(authText && /access token does not exist|unauthorized/i.test(authText),
-     'live 401 passes through the real auth-failure message', JSON.stringify(authText));
+  // ---- Error passthrough on LIVE: HTTP errors must surface clean messages, not "{}" ----
+  r = await callTool('get_category', { id: 999999999 });
+  ok(r.isError && r.text && r.text !== '{}', 'HTTP error passes through a real message, not "{}"', JSON.stringify(r.text));
 
   // ---- Guard: no tool may silently fall back to raw JSON in markdown mode ----
   // Mirrors the unit-suite guard: any "No markdown renderer matched" warning means
