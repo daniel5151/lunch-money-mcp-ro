@@ -57,7 +57,24 @@ async function runTests() {
         assert.strictEqual(prmRes.status, 200, 'Protected resource metadata should return 200');
         const prm = await prmRes.json();
         assert.ok(prm.authorization_servers.some(s => s === BASE_URL || s === `${BASE_URL}/`), 'Should include authorization server');
+        assert.strictEqual(prm.resource_name, 'Lunch Money MCP (read-only)', 'Resource name should match');
+        assert.strictEqual(prm.logo_uri, 'https://raw.githubusercontent.com/lunch-money/developers/master/source/images/android-chrome-512x512.png', 'Logo URI should be set');
         console.log('[PASS] Protected Resource Metadata verified.');
+
+        // Test 1b: Verify health and public icon endpoints
+        console.log('[Test 1b] Checking health and public icon endpoints (/health, /icon.png, /favicon.ico)...');
+        const healthRes = await fetch(`${BASE_URL}/health`);
+        const health = await healthRes.json();
+        assert.strictEqual(health.server, 'Lunch Money MCP (read-only)', 'Health check server name should match');
+
+        const iconRes = await fetch(`${BASE_URL}/icon.png`, { redirect: 'manual' });
+        assert.strictEqual(iconRes.status, 302, 'GET /icon.png should return 302 redirect');
+        assert.strictEqual(iconRes.headers.get('location'), 'https://raw.githubusercontent.com/lunch-money/developers/master/source/images/android-chrome-512x512.png');
+
+        const favRes = await fetch(`${BASE_URL}/favicon.ico`, { redirect: 'manual' });
+        assert.strictEqual(favRes.status, 302, 'GET /favicon.ico should return 302 redirect');
+        assert.strictEqual(favRes.headers.get('location'), 'https://raw.githubusercontent.com/lunch-money/developers/master/source/images/android-chrome-512x512.png');
+        console.log('[PASS] Health check and icon endpoints verified.');
 
         // Test 2: OAuth Authorization Server Metadata (RFC 8414)
         console.log('[Test 2] Checking RFC 8414 Authorization Server Metadata...');
@@ -209,6 +226,10 @@ async function runTests() {
             })
         });
         assert.strictEqual(initRes.status, 200, 'Initialize should return 200');
+        const initText = await initRes.text();
+        assert.ok(initText.includes('"name":"Lunch Money MCP (read-only)"'), 'Server name in serverInfo should match');
+        assert.ok(initText.includes('https://github.com/daniel5151/lunch-money-mcp-ro'), 'GitHub repo URL in serverInfo should match');
+        assert.ok(initText.includes('android-chrome-512x512.png') || initText.includes('/icon.png'), 'High-res icon should be reported');
         const sessionId = initRes.headers.get('mcp-session-id');
         assert.ok(sessionId, 'Server should assign mcp-session-id');
 

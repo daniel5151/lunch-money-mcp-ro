@@ -6,6 +6,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 
+const DEFAULT_ICON_URL = 'https://raw.githubusercontent.com/lunch-money/developers/master/source/images/android-chrome-512x512.png';
+
 /**
  * Validates a candidate redirect URI against allowed patterns.
  */
@@ -43,6 +45,19 @@ export async function createHttpApp(mcpServer, options = {}) {
     const clientSecret = options.clientSecret || process.env.MCP_OAUTH_CLIENT_SECRET || crypto.randomBytes(32).toString('hex');
     const baseUrlString = options.baseUrl || process.env.MCP_BASE_URL || 'http://localhost:3000';
     const baseUrl = new URL(baseUrlString);
+
+    if (mcpServer?._serverInfo) {
+        mcpServer._serverInfo.name = 'Lunch Money MCP (read-only)';
+        mcpServer._serverInfo.title = 'Lunch Money MCP (read-only)';
+        mcpServer._serverInfo.websiteUrl = 'https://github.com/daniel5151/lunch-money-mcp-ro';
+        mcpServer._serverInfo.icons = [
+            {
+                src: DEFAULT_ICON_URL,
+                mimeType: 'image/png',
+                sizes: ['512x512']
+            }
+        ];
+    }
 
     const rawJwtSecret = options.jwtSecret || process.env.MCP_JWT_SECRET || crypto.randomBytes(32).toString('hex');
     const jwtKey = new TextEncoder().encode(rawJwtSecret.padEnd(32, '!'));
@@ -235,8 +250,13 @@ export async function createHttpApp(mcpServer, options = {}) {
         resource: baseUrl.href,
         authorization_servers: [baseUrl.href],
         scopes_supported: ['lunchmoney:read'],
-        resource_name: 'Lunch Money Read-Only MCP'
+        resource_name: 'Lunch Money MCP (read-only)',
+        logo_uri: DEFAULT_ICON_URL
     };
+
+    app.get(['/favicon.ico', '/icon.png'], (_req, res) => {
+        res.redirect(DEFAULT_ICON_URL);
+    });
 
     app.get('/.well-known/oauth-protected-resource', (_req, res) => {
         res.setHeader('Cache-Control', 'no-store');
@@ -251,7 +271,9 @@ export async function createHttpApp(mcpServer, options = {}) {
             response_types_supported: ['code'],
             code_challenge_methods_supported: ['S256'],
             token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
-            grant_types_supported: ['authorization_code', 'refresh_token']
+            grant_types_supported: ['authorization_code', 'refresh_token'],
+            client_name: 'Lunch Money MCP (read-only)',
+            logo_uri: DEFAULT_ICON_URL
         });
     });
 
@@ -260,7 +282,7 @@ export async function createHttpApp(mcpServer, options = {}) {
         issuerUrl: baseUrl,
         resourceServerUrl: baseUrl,
         scopesSupported: ['lunchmoney:read'],
-        resourceName: 'Lunch Money Read-Only MCP'
+        resourceName: 'Lunch Money MCP (read-only)'
     }));
 
     let transport = new StreamableHTTPServerTransport({
@@ -292,7 +314,7 @@ export async function createHttpApp(mcpServer, options = {}) {
     app.get('/health', (_req, res) => {
         res.json({
             status: 'ok',
-            server: 'lunchmoney-exhaustive-readonly-mcp',
+            server: 'Lunch Money MCP (read-only)',
             transport: 'streamable-http',
             timestamp: new Date().toISOString()
         });

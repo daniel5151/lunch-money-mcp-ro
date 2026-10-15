@@ -1563,7 +1563,19 @@ const SERVER_INSTRUCTIONS = `# Lunch Money MCP Server Instructions
    - Category and tag names are resolved automatically from local cache without extra API calls.`;
 
 const mcpServer = new Server(
-    { name: "lunchmoney-exhaustive-readonly-mcp", version: "2.3.0" },
+    { 
+        name: "Lunch Money MCP (read-only)", 
+        version: "2.3.0",
+        title: "Lunch Money MCP (read-only)",
+        websiteUrl: "https://github.com/daniel5151/lunch-money-mcp-ro",
+        icons: [
+            {
+                src: "https://raw.githubusercontent.com/lunch-money/developers/master/source/images/android-chrome-512x512.png",
+                mimeType: "image/png",
+                sizes: ["512x512"]
+            }
+        ]
+    },
     { 
         capabilities: { tools: {}, resources: {}, prompts: {} },
         instructions: SERVER_INSTRUCTIONS

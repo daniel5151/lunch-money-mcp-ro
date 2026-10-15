@@ -123,7 +123,12 @@ async function finish(code) {
 (async () => {
   // ---- Handshake ----
   const init = await rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'live-harness', version: '1' } });
-  ok(init.result && init.result.serverInfo, 'handshake: initialize returns serverInfo', JSON.stringify(init.error || {}));
+  ok(init.result && init.result.serverInfo && init.result.serverInfo.name === 'Lunch Money MCP (read-only)',
+     'handshake: initialize returns serverInfo with self-reported name', JSON.stringify(init.error || {}));
+  ok(init.result && init.result.serverInfo && init.result.serverInfo.websiteUrl === 'https://github.com/daniel5151/lunch-money-mcp-ro',
+     'handshake: initialize returns serverInfo with github websiteUrl', JSON.stringify(init.result && init.result.serverInfo));
+  ok(init.result && init.result.serverInfo && Array.isArray(init.result.serverInfo.icons) && init.result.serverInfo.icons.length > 0,
+     'handshake: initialize returns serverInfo with high-res icon', JSON.stringify(init.result && init.result.serverInfo));
   ok(init.result && typeof init.result.instructions === 'string' && init.result.instructions.includes('Sign Convention'),
      'handshake: initialize returns native server instructions', JSON.stringify(init.result && init.result.instructions));
   notify('notifications/initialized');
