@@ -51,9 +51,9 @@ This server allows LLMs (like Claude Desktop, Cursor, or other MCP clients) to r
 
 ---
 
-## Configuration
+## Deployment - Local (stdio)
 
-The server requires your Lunch Money API key, set as `LUNCHMONEY_API_KEY`.
+This server can be run locally using the MCP **stdio** transport.
 
 You can configure this in two ways:
 
@@ -77,32 +77,94 @@ Alternatively, set the environment variable when configuring your MCP server:
 }
 ```
 
-### Optional: targeting a different API base
-
-By default the server talks to `https://api.lunchmoney.dev/v2`. Set
-`LM_API_BASE_URL` to point it at a different host — used by the test suite to
-run against a local mock, and useful for a staging endpoint:
-
-```sh
-LM_API_BASE_URL=http://127.0.0.1:8787/v2 node lunch-money-mcp-ro.js
-```
-
 ---
 
-## Testing
+## Deployment - HTTPS (StreamableHTTP)
 
-End-to-end tests run the real server against the official Lunch Money v2 static
-mock API (`mock.lunchmoney.dev/v2`) — no real API key and no account needed.
-`npm test` starts a local relay automatically, then drives the server over
-stdio JSON-RPC and asserts on the rendered output:
+This server can be hosted as an HTTPS endpoint using the MCP **StreamableHTTP** transport.
 
-```sh
-npm test
+### Environment Configuration
+
+Copy `.env.example` to `.env` and configure:
+
+```bash
+LUNCHMONEY_API_KEY="your_lunch_money_api_key"
+
+MCP_MODE="http"
+MCP_PORT="3000"
+MCP_BASE_URL="https://lm-mcp-ro.example.com"
+
+# Credentials you make up and enter into Gemini Web:
+MCP_OAUTH_CLIENT_ID="gemini-client"
+MCP_OAUTH_CLIENT_SECRET="generate-a-secure-random-client-secret"
+
+# Secret key used to sign stateless JWT access and refresh tokens:
+MCP_JWT_SECRET="generate-a-random-64-character-hex-string"
 ```
 
-See [`test/README.md`](test/README.md) for what is covered and how to extend
-it, and [`test/MOCK-SERVER.md`](test/MOCK-SERVER.md) for the mock and relay
-details.
+### Example: Automated Alpine Linux Install (LXC Container / Bare Metal)
+
+A dedicated OpenRC deployment script is provided for running (without Docker) in an Alpine Linux LXC container.
+
+You can run the installer directly via `wget` (included by default in Alpine) on your VM:
+
+```bash
+# Run the one-line installer
+wget -qO- https://raw.githubusercontent.com/daniel5151/lunch-money-mcp-ro/main/deploy-alpine.sh | sh
+# Then, follow instructions emitted from the installer
+```
+
+*(Alternatively, you can clone the repository manually and run `./deploy-alpine.sh` from within the repo directory).*
+
+This automatically installs required packages (`nodejs`, `npm`, `git`, `logrotate`), clones to `/opt/lunch-money-mcp-ro`, generates `.env` with random OAuth/JWT secrets, registers an OpenRC service with auto-respawn (`/etc/init.d/lunch-money-mcp-ro`), and sets up daily log rotation.
+
+> [!NOTE]
+>
+> Feel free to ask your favorite AI agent to write you a script, systemd service, or Dockerfile to deploy this in whatever environment you're running.
+
+### Reverse Proxy Configuration
+
+> This assumes you're using Nginx. Similar considerations apply for other reverse proxies (e.g: Caddy)
+
+Nginx must have **proxy buffering disabled** (`proxy_buffering off;`) to support MCP's StreamableHTTP streaming:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name lm-mcp-ro.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/lm-mcp-ro.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/lm-mcp-ro.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        # Mandatory for Model Context Protocol StreamableHTTP / SSE
+        proxy_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding on;
+
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
+```
+
+### Example: Connecting to Gemini Web
+
+1. Go to **[gemini.google.com](https://gemini.google.com)** --> **Settings** --> **Connected Apps** (or Custom apps).
+2. Click **Add a custom app**.
+3. **URL:** `https://lm-mcp-ro.example.com`
+4. Expand **Show more** / **Advanced features**:
+   - **OAuth Client ID:** `gemini-client` (matching your `.env`)
+   - **OAuth Secret:** `<MCP_OAUTH_CLIENT_SECRET>` (matching your `.env`)
+5. Click **Next** / **Connect** --> A popup opens and closes automatically within milliseconds.
+6. The connector is linked and ready to use!
 
 ---
 
@@ -264,3 +326,36 @@ Get a temporary download URL for a transaction attachment.
 ### 19. `clear_cache`
 Clear internal in-memory caches (accounts, categories, tags).
 - **Arguments**: None
+
+---
+
+## Testing
+
+End-to-end tests run the real server against the official Lunch Money v2 static
+mock API (`mock.lunchmoney.dev/v2`) — no real API key and no account needed.
+`npm test` starts a local relay automatically, then drives the server over
+stdio JSON-RPC and asserts on the rendered output:
+
+```sh
+npm test
+```
+
+See [`test/README.md`](test/README.md) for what is covered and how to extend
+it, and [`test/MOCK-SERVER.md`](test/MOCK-SERVER.md) for the mock and relay
+details.
+
+To run the HTTP & OAuth 2.1 integration tests:
+
+```sh
+npm run test:http
+```
+
+### Optional: targeting a different API base
+
+By default the server talks to `https://api.lunchmoney.dev/v2`. Set
+`LM_API_BASE_URL` to point it at a different host — used by the test suite to
+run against a local mock, and useful for a staging endpoint:
+
+```sh
+LM_API_BASE_URL=http://127.0.0.1:8787/v2 node lunch-money-mcp-ro.js
+```

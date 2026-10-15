@@ -7,13 +7,18 @@
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.1",
         "ajv": "^8.20.0",
-        "ajv-formats": "^3.0.1"
+        "ajv-formats": "^3.0.1",
+        "cors": "^2.8.5",
+        "express": "^5.0.0"
     },
     "engines": {
         "node": ">=20.6.0"
     },
     "scripts": {
+        "start": "node lunch-money-mcp-ro.js",
+        "start:http": "node lunch-money-mcp-ro.js --http",
         "test": "node test/run-live.js",
-        "test:live": "node test/run-live.js"
+        "test:live": "node test/run-live.js",
+        "test:http": "node test/test-http-auth.js"
     }
 }

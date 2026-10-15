@@ -1759,32 +1759,41 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 });
 
-const transport = new StdioServerTransport();
+const isHttpMode = process.argv.includes('--http') || process.env.MCP_MODE === 'http' || !!process.env.MCP_PORT;
 
-let initialized = false;
-const originalConnect = mcpServer.connect.bind(mcpServer);
-mcpServer.connect = async (trans) => {
-    await originalConnect(trans);
-    const sdkOnMessage = trans.onmessage;
-    trans.onmessage = (message, extra) => {
-        if (message && message.method) {
-            if (message.method === 'initialize') {
-                initialized = true;
-            } else if (!initialized && message.id !== undefined) {
-                trans.send({
-                    jsonrpc: '2.0',
-                    id: message.id,
-                    error: {
-                        code: -32002,
-                        message: 'Server not initialized'
-                    }
-                }).catch(err => console.error("[MCP Error] Failed to send initialization error response:", err));
-                return;
+if (isHttpMode) {
+    const { startHttpServer } = await import('./http-server.js');
+    await startHttpServer(mcpServer);
+} else {
+    const transport = new StdioServerTransport();
+
+    let initialized = false;
+    const originalConnect = mcpServer.connect.bind(mcpServer);
+    mcpServer.connect = async (trans) => {
+        await originalConnect(trans);
+        const sdkOnMessage = trans.onmessage;
+        trans.onmessage = (message, extra) => {
+            if (message && message.method) {
+                if (message.method === 'initialize') {
+                    initialized = true;
+                } else if (!initialized && message.id !== undefined) {
+                    trans.send({
+                        jsonrpc: '2.0',
+                        id: message.id,
+                        error: {
+                            code: -32002,
+                            message: 'Server not initialized'
+                        }
+                    }).catch(err => console.error("[MCP Error] Failed to send initialization error response:", err));
+                    return;
+                }
             }
-        }
-        sdkOnMessage(message, extra);
+            sdkOnMessage(message, extra);
+        };
     };
-};
 
-await mcpServer.connect(transport);
-console.error("[MCP] Fully Exhaustive Read-Only Server connected via Stdio channels.");
+    await mcpServer.connect(transport);
+    console.error("[MCP] Fully Exhaustive Read-Only Server connected via Stdio channels.");
+}
+
+export { mcpServer };
