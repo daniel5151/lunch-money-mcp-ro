@@ -223,7 +223,7 @@ export async function createHttpApp(mcpServer, options = {}) {
                     clientId: String(payload.sub),
                     scopes: payload.scopes || ['lunchmoney:read'],
                     expiresAt: payload.exp,
-                    resource: new URL(`${baseUrl.origin}/mcp`)
+                    resource: baseUrl
                 };
             } catch (err) {
                 throw err;
@@ -232,7 +232,7 @@ export async function createHttpApp(mcpServer, options = {}) {
     };
 
     const protectedResourceMetadata = {
-        resource: `${baseUrl.origin}/mcp`,
+        resource: baseUrl.href,
         authorization_servers: [baseUrl.href],
         scopes_supported: ['lunchmoney:read'],
         resource_name: 'Lunch Money Read-Only MCP'
@@ -258,7 +258,7 @@ export async function createHttpApp(mcpServer, options = {}) {
     app.use(mcpAuthRouter({
         provider: oauthProvider,
         issuerUrl: baseUrl,
-        resourceServerUrl: new URL(`${baseUrl.origin}/mcp`),
+        resourceServerUrl: baseUrl,
         scopesSupported: ['lunchmoney:read'],
         resourceName: 'Lunch Money Read-Only MCP'
     }));
@@ -268,7 +268,7 @@ export async function createHttpApp(mcpServer, options = {}) {
     });
     await mcpServer.connect(transport);
 
-    app.all('/mcp',
+    app.all(['/', '/mcp'],
         requireBearerAuth({
             verifier: oauthProvider,
             resourceMetadataUrl: `${baseUrl.origin}/.well-known/oauth-protected-resource`

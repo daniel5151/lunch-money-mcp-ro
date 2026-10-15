@@ -70,17 +70,19 @@ async function runTests() {
         assert.ok(asMeta.code_challenge_methods_supported.includes('S256'), 'Should support S256 PKCE');
         console.log('[PASS] Authorization Server Metadata verified.');
 
-        // Test 3: Unauthenticated /mcp returns 401 with WWW-Authenticate
-        console.log('[Test 3] Verifying 401 Unauthorized challenge on unauthenticated /mcp...');
-        const unauthRes = await fetch(`${BASE_URL}/mcp`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: '{}'
-        });
-        assert.strictEqual(unauthRes.status, 401, 'Unauthenticated request should return 401');
-        const wwwAuth = unauthRes.headers.get('www-authenticate');
-        assert.ok(wwwAuth && wwwAuth.includes('resource_metadata='), 'Should have WWW-Authenticate header pointing to metadata');
-        console.log('[PASS] 401 challenge verified with WWW-Authenticate header.');
+        // Test 3: Unauthenticated / and /mcp return 401 with WWW-Authenticate
+        console.log('[Test 3] Verifying 401 Unauthorized challenge on unauthenticated / and /mcp...');
+        for (const path of ['/', '/mcp']) {
+            const unauthRes = await fetch(`${BASE_URL}${path}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}'
+            });
+            assert.strictEqual(unauthRes.status, 401, `Unauthenticated POST ${path} should return 401`);
+            const wwwAuth = unauthRes.headers.get('www-authenticate');
+            assert.ok(wwwAuth && wwwAuth.includes('resource_metadata='), `POST ${path} should have WWW-Authenticate header pointing to metadata`);
+        }
+        console.log('[PASS] 401 challenge verified on both / and /mcp with WWW-Authenticate header.');
 
         // Test 4: Automated zero-click authorization code issuance on /authorize
         console.log('[Test 4] Testing zero-click authorization code issuance on /authorize...');
